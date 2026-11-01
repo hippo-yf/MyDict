@@ -1,0 +1,52 @@
+{
+  "FontName": "Microsoft YaHei UI",
+  "FontSize": 16,
+  "DefinitionFontName": "Georgia",
+  "DelayMs": 650,
+  "Provider": "MyMemory",
+  "LibreUrl": "https://libretranslate.com/translate",
+  "ApiKey": "",
+  "ProtectedApiKey": null,
+  "ShowExamples": true,
+  "ShowDerived": true,
+  "Window": null,
+  "Styles": {
+    "02_单词本": {
+      "_说明": {
+        "number.book.word_size": "单词本词头字号。",
+        "number.book.translation_size": "单词本中文翻译字号。",
+        "thickness.book.row_padding": "单词本条目内边距；两个值表示水平、垂直，四个值为左、上、右、下。"
+      },
+      "number.book.word_size": "14",
+      "number.book.translation_size": "12",
+      "thickness.book.row_padding": "8,2"
+    },
+    "03_词条与释义": {
+      "_说明": {
+        "font.doc.body": "中文释义及辅助正文使用的系统字体名称。",
+        "font.doc.serif": "英文词头、英文释义和例句使用的衬线字体名称。",
+        "number.doc.scale": "解释区整体尺寸倍率；1 为原始大小，1.1 表示放大 10%。"
+      },
+      "font.doc.body": "Microsoft YaHei UI",
+      "font.doc.serif": "Georgia",
+      "number.doc.scale": "1"
+    }
+  },
+  "_说明": {
+    "FontName": "旧版界面字体兼容字段；当前显示字体请在 Styles 中修改。",
+    "FontSize": "旧版字号兼容字段，保留范围 12–28；当前显示字号由 Styles 决定。",
+    "DefinitionFontName": "旧版英文释义字体兼容字段；当前使用 Styles 中的 font.doc.serif。",
+    "DelayMs": "停止输入后自动查询的等待时间，单位毫秒，范围 300–3000。",
+    "Provider": "翻译来源：MyMemory 或 LibreTranslate。",
+    "LibreUrl": "LibreTranslate 完整 /translate 接口地址；公共服务器使用 HTTPS，本机可使用 HTTP。",
+    "ApiKey": "手动填写的翻译服务密钥，留空时读取 ProtectedApiKey；此字段填写后以明文保存，请勿公开。",
+    "ProtectedApiKey": "由 Windows 当前用户加密的旧版密钥；通常无需手动修改，清除时设为 null。",
+    "ShowExamples": "是否显示词典例句：true 显示，false 隐藏。",
+    "ShowDerived": "是否显示派生词及搭配：true 显示，false 隐藏。",
+    "Window": "上次关闭时保存的窗口位置、大小及最大化状态；一般由程序自动维护。",
+    "Styles": "按用途分组的显示样式；只修改样式键的值，保存后自动重新加载。未填写的键使用内置默认值。",
+    "_说明": "中文使用说明，不参与程序配置；可修改说明文字。JSON 不支持 // 注释。",
+    "_配置版本": "配置排版版本，供程序识别分组和说明格式，请保持为 2。"
+  },
+  "_配置版本": 2
+}
