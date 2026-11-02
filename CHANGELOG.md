@@ -1,3 +1,7 @@
+# 1.5.0-dev (develop/1.5)
+
+- Start independent 1.5 development from frozen v1.4.0; build output: bin/1.5.
+
 # v1.4.0
 
 2026-11-02

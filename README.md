@@ -2,7 +2,7 @@
 
 简洁的 Windows 中英词典，使用 C# / WPF 开发。
 
-**当前固定版：v1.4.0（标签 v1.4.0）**；旧版 `v1.3.0` 保留在原标签。 · 作者：Yance Feng & Codex · [MIT License](LICENSE)
+**当前开发版：v1.5.0-dev（develop/1.5）**；固定版 `v1.4.0` 保留在原标签。 · 作者：Yance Feng & Codex · [MIT License](LICENSE)
 
 ## 功能
 
@@ -66,7 +66,7 @@
 .\build.ps1
 ```
 
-1.4 开发输出为 `bin\1.4\MyDict.exe`。运行离线核心检查：
+1.5 开发输出为 `bin\1.5\MyDict.exe`。运行离线核心检查：
 
 ```powershell
 .\tools\Test-Release.ps1

@@ -1,14 +1,14 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
-$version = '1.4.0'
+$version = '1.5.0-dev'
 $folder = Join-Path $root ('release\MyDict-v' + $version + '-win')
 New-Item -ItemType Directory -Path $folder -Force | Out-Null
 foreach ($name in @('MyDict.exe','MyDict.exe.config')) {
- Copy-Item -LiteralPath (Join-Path $root ('bin\1.4\' + $name)) -Destination (Join-Path $folder $name) -Force
+ Copy-Item -LiteralPath (Join-Path $root ('bin\1.5\' + $name)) -Destination (Join-Path $folder $name) -Force
 }
 foreach ($name in @('LICENSE','THIRD-PARTY-NOTICES.md','settings.example.json')) { Copy-Item -LiteralPath (Join-Path $root $name) -Destination (Join-Path $folder $name) -Force }
 @'
-MyDict v1.4.0
+MyDict v1.5.0-dev
 Authors: Yance Feng & Codex
 
 Extract to a writable folder and run MyDict.exe. Requires Windows and .NET Framework 4.8.
