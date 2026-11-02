@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -28,7 +28,9 @@ namespace MyDict
         }
         private static string Group(string key)
         {
+            if(key.Contains(".grammar."))return "09_句法与词性样式";
             if(key.StartsWith("color."))return "01_全局配色";
+            if(key.Contains(".deepseek."))return "08_DeepSeek与查询";
             if(key.Contains(".book."))return "02_单词本";
             if(key.Contains(".doc."))return "03_词条与释义";
             if(key.Contains(".mainwindow."))return "04_主窗口与导航";
@@ -54,6 +56,7 @@ namespace MyDict
             var named=new Dictionary<string,string> {
                 {"font.doc.body","中文释义及辅助正文使用的系统字体名称。"},{"font.doc.serif","英文词头、英文释义和例句使用的衬线字体名称。"},
                 {"font.doc.phonetic","音标字体；请选择支持 IPA 音标的系统字体。"},{"font.doc.tabs","词性筛选按钮字体。"},
+                {"number.doc.leading_scale","解释区行距倍率；Ctrl+[ 或 Ctrl+] 调整。"},
                 {"number.doc.scale","解释区整体尺寸倍率；1 为原始大小，1.1 表示放大 10%。"},{"number.doc.line_spacing","普通段落的行距倍率。"},
                 {"number.book.word_size","单词本词头字号。"},{"number.book.translation_size","单词本中文翻译字号。"},
                 {"number.book.word_line_height","单词本词头每行高度。"},{"number.book.translation_line_height","单词本翻译每行高度。"},
@@ -97,15 +100,21 @@ namespace MyDict
                 {"ProtectedApiKey","由 Windows 当前用户加密的旧版密钥；通常无需手动修改，清除时设为 null。"},
                 {"ShowExamples","是否显示词典例句：true 显示，false 隐藏。"},{"ShowDerived","是否显示派生词及搭配：true 显示，false 隐藏。"},
                 {"Window","上次关闭时保存的窗口位置、大小及最大化状态；一般由程序自动维护。"},
+                {"DeepSeek","DeepSeek API 查询开关、密钥、接口地址和模型。启用后直接输入不会自动调用 API；点击查询按钮或解释中的单词可查询。"},
                 {"Styles","按用途分组的显示样式；只修改样式键的值，保存后自动重新加载。未填写的键使用内置默认值。"},
                 {"_说明","中文使用说明，不参与程序配置；可修改说明文字。JSON 不支持 // 注释。"},
-                {"_配置版本","配置排版版本，供程序识别分组和说明格式，请保持为 2。"}
+                {"_配置版本","配置排版版本，供程序识别分组和说明格式，请保持为 3。"}
             };
             object old;var existing=root.TryGetValue("_说明",out old)?old as Dictionary<string,object>:null;
             if(existing!=null)foreach(var item in existing)notes[item.Key]=item.Value;
             foreach(var key in root.Keys)if(!notes.ContainsKey(key))notes[key]="保留的自定义字段，程序不会将其作为显示样式读取。";
-            root["_说明"]=notes;root["_配置版本"]=2;
+            root["_说明"]=notes;notes["_配置版本"]="配置排版版本，请保持为 3。";root["_配置版本"]=3;
             object styles;if(root.TryGetValue("Styles",out styles)&&styles!=null)root["Styles"]=GroupStyles(FlattenStyles(styles));
+            object deepRaw;
+            var serializer=new JavaScriptSerializer();
+            var deep=root.TryGetValue("DeepSeek",out deepRaw)?deepRaw as Dictionary<string,object>:null;
+            if(deep==null){deep=serializer.Deserialize<Dictionary<string,object>>(serializer.Serialize(new DeepSeekOptions()));root["DeepSeek"]=deep;}
+            deep["_说明"]=new Dictionary<string,object>{{"Enabled","是否启用 DeepSeek。true 时直接输入和历史导航只读缓存；点击查询按钮或解释中的单词可调用 API。"},{"ApiKey","DeepSeek API 密钥，保存在本地 JSON 中，请勿公开。"},{"Endpoint","完整 HTTPS Chat Completions 接口地址，默认 https://api.deepseek.com/chat/completions。"},{"Model","模型名称，默认 deepseek-flash；可按服务提供方文档修改。"},{"TimeoutSeconds","请求超时秒数，范围 10–300。"},{"MaxTokens","输出 token 上限，范围 512–16384；截断时可适当增大。"}};
             object window;var position=root.TryGetValue("Window",out window)?window as Dictionary<string,object>:null;
             if(position!=null)position["_说明"]=new Dictionary<string,object>{{"Left","普通窗口左侧坐标，可为负值（位于左侧副显示器时）。"},{"Top","普通窗口顶部坐标。"},{"Width","普通窗口宽度。"},{"Height","普通窗口高度。"},{"Maximized","下次启动是否最大化；true 最大化，false 普通窗口。"}};
         }
@@ -114,12 +123,14 @@ namespace MyDict
             var serializer=new JavaScriptSerializer();
             var root=serializer.Deserialize<Dictionary<string,object>>(File.ReadAllText(path,Encoding.UTF8));
             if(root==null)throw new InvalidOperationException("配置文件为空。");
-            object version;if(root.TryGetValue("_配置版本",out version)&&Convert.ToString(version)=="2")return;
+            object version;if(root.TryGetValue("_配置版本",out version)&&Convert.ToString(version)=="3")return;
             Decorate(root);
             File.WriteAllText(path+".tmp",SettingsStore.FormatJson(serializer.Serialize(root)),new UTF8Encoding(false));
             File.Replace(path+".tmp",path,path+".bak");
         }
     }
 }
+
+
 
 

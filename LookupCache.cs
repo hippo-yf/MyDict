@@ -24,6 +24,17 @@ namespace MyDict
         {
             return settings.Provider+"|"+(settings.Provider=="LibreTranslate"?settings.LibreUrl:"")+"|"+pair+"|"+word.Trim().Normalize().ToLowerInvariant();
         }
+        public static string KeyForEntry(Entry entry)
+        {
+            string pair=entry.Pair??Translator.DetectPair(entry.Word);
+            if(LookupSources.IsDeepSeek(entry))return "DeepSeek|"+entry.QueryEndpoint+"|"+entry.LookupModel+"|"+pair+"|"+entry.Word.Trim().Normalize().ToLowerInvariant();
+            return Key(entry.Word,pair,new AppSettings{Provider=entry.TranslationProvider??"MyMemory",LibreUrl=entry.TranslationUrl});
+        }
+        public Entry FindDeepSeek(string word,string pair)
+        {
+            return data.Results.Values.Where(e=>LookupSources.IsDeepSeek(e)&&string.Equals(e.Word.Trim(),word.Trim(),StringComparison.OrdinalIgnoreCase)&&e.Pair==pair).OrderByDescending(e=>e.QueriedAtUtc??e.SavedAt).FirstOrDefault();
+        }
+        public Entry FindPreferred(string word,string pair,AppSettings settings) {return FindDeepSeek(word,pair)??Find(Key(word,pair,settings));}
         public void Load()
         {
             if(!File.Exists(path))return;
@@ -63,5 +74,6 @@ namespace MyDict
         }
     }
 }
+
 
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Windows;
@@ -17,14 +17,14 @@ namespace MyDict
             public string Word { get; private set; }
             public WordLookupArgs(string word) : base(WordLookupEvent) { Word=word; }
         }
-        private static void AddWords(InlineCollection inlines,string text,Brush foreground)
+        internal static void AddWords(InlineCollection inlines,string text,Brush foreground,bool preserveWhitespace=false)
         {
-            text=Translator.CleanText(text); int offset=0;
+            text=preserveWhitespace?(text??""):Translator.CleanText(text); int offset=0;
             foreach(Match match in Regex.Matches(text,@"[A-Za-z]+(?:['’\-][A-Za-z]+)*"))
             {
                 if(match.Index>offset) inlines.Add(new Run(text.Substring(offset,match.Index-offset)));
                 string word=match.Value;
-                var link=new Hyperlink(new Run(word)) { Foreground=foreground, TextDecorations=null, Cursor=System.Windows.Input.Cursors.Hand, ToolTip="查询 "+word };
+                var link=new Hyperlink(new Run(word)) { Foreground=foreground, TextDecorations=null, Cursor=System.Windows.Input.Cursors.Hand };
                 link.MouseEnter+=(s,e)=>link.TextDecorations=TextDecorations.Underline;
                 link.MouseLeave+=(s,e)=>link.TextDecorations=null;
                 link.GotKeyboardFocus+=(s,e)=>link.TextDecorations=TextDecorations.Underline;
@@ -54,7 +54,7 @@ namespace MyDict
         private static FontFamily Serif { get { return ThemeStyles.Font("font.doc.serif"); } }
         private static Paragraph Paragraph(string text, double size = 16, string color = "#363636")
         {
-            return new Paragraph(new Run(Translator.CleanText(text))) { FontSize = Size(size), Foreground = Color(color), Margin = ThemeStyles.Thickness("thickness.doc.spacing.1"), LineHeight = Size(size) * ThemeStyles.Number("number.doc.line_spacing",1.55) };
+            return new Paragraph(new Run(Translator.CleanText(text))) { FontSize = Size(size), Foreground = Color(color), Margin = ThemeStyles.Thickness("thickness.doc.spacing.1"), LineHeight = Size(size) * ThemeStyles.Number("number.doc.line_spacing",1.55)*ThemeStyles.Number("number.doc.leading_scale",1) };
         }
         private static Paragraph Heading(string text)
         {
@@ -128,6 +128,7 @@ namespace MyDict
             var title=Paragraph("",34,"#0074CB"); title.FontFamily=Serif; title.FontWeight=ThemeStyles.Weight("weight.doc.bold"); title.Margin=ThemeStyles.Thickness("thickness.doc.spacing.14");
             title.Inlines.Add(new Run(entry.Word));
             if(selectedPart!=null) title.Inlines.Add(new Run("  "+EnglishPart(selectedPart).ToLowerInvariant()){FontSize=Size(21),FontWeight=ThemeStyles.Weight("weight.doc.normal"),FontStyle=ThemeStyles.FontStyle("fontstyle.doc.italic"),Foreground=Color("#D88632")});
+            if(!string.IsNullOrWhiteSpace(entry.ShortTranslation)) title.Inlines.Add(new Run("   "+entry.ShortTranslation){FontFamily=ThemeStyles.Font("font.doc.body"),FontSize=Size(17),FontWeight=ThemeStyles.Weight("weight.doc.normal"),Foreground=Color("#008577")});
             header.Blocks.Add(title);
             if(!string.IsNullOrWhiteSpace(record?.Phonetic))
             {
@@ -139,27 +140,37 @@ namespace MyDict
             if(record==null) RenderLegacy(doc,entry.Details??"这条收藏尚未包含词典资料，重新查询并收藏即可补充。");
             else
             {
+                if(record.Meanings.SelectMany(m=>m.Senses).Any(s=>SentenceStyles.Valid(s.Definition,s.DefinitionSegments)||(Settings.ShowExamples&&s.Examples!=null&&s.Examples.Any(x=>SentenceStyles.Valid(x.Text,x.Segments))))) doc.Blocks.Add(SentenceStyles.Legend());
                 foreach(var group in groups.Where(g=>selectedPart==null||g.Key==selectedPart))
                 {
                     var part=Paragraph("",15,"#D88632"); part.FontFamily=Serif; part.FontStyle=ThemeStyles.FontStyle("fontstyle.doc.italic"); part.Margin=ThemeStyles.Thickness("thickness.doc.spacing.17");
                     part.Inlines.Add(new Run(EnglishPart(group.Key).ToLowerInvariant()){FontWeight=ThemeStyles.Weight("weight.doc.bold")});
-                    part.Inlines.Add(new Run("  "+group.Key){FontSize=Size(12),FontFamily=ThemeStyles.Font("font.doc.body"),FontStyle=ThemeStyles.FontStyle("fontstyle.doc.normal"),Foreground=Color("#777777")});
+
                     string forms=record.Forms?.ForPartOfSpeech(group.Key);
                     if(!string.IsNullOrWhiteSpace(forms)) { var inflections=new Span { FontSize=Size(16), FontStyle=ThemeStyles.FontStyle("fontstyle.doc.normal"), FontFamily=ThemeStyles.Font("font.doc.body"), Foreground=Color("#666666") }; inflections.Inlines.Add(new Run("    ")); AddWords(inflections.Inlines,forms,inflections.Foreground); part.Inlines.Add(inflections); }
                     doc.Blocks.Add(part);
                     int index=0;
                     foreach(var sense in group.SelectMany(m=>m.Senses).GroupBy(s=>s.Definition).Select(g=>g.First()))
                     {
-                        var p=Paragraph("",20); p.FontFamily=Serif; p.LineHeight=Size(30); p.Margin=ThemeStyles.Thickness("thickness.doc.spacing.18");
+                        var p=Paragraph("",20); p.FontFamily=Serif; p.LineHeight=Size(30)*ThemeStyles.Number("number.doc.leading_scale",1); p.Margin=ThemeStyles.Thickness("thickness.doc.spacing.18");
                         p.Inlines.Add(new Run((++index)+"  "){Foreground=Color("#D60032"),FontStyle=ThemeStyles.FontStyle("fontstyle.doc.italic"),FontWeight=ThemeStyles.Weight("weight.doc.bold")});
-                        AddWords(p.Inlines,sense.Definition,p.Foreground); doc.Blocks.Add(p);
-                        var chinese=Paragraph("",17,"#008577"); chinese.Margin=ThemeStyles.Thickness("thickness.doc.spacing.19"); chinese.LineHeight=Size(26);
+                        SentenceStyles.Append(p,sense.Definition,sense.DefinitionSegments); doc.Blocks.Add(p);
+                        var chinese=Paragraph("",17,"#008577"); chinese.Margin=ThemeStyles.Thickness("thickness.doc.spacing.19"); chinese.LineHeight=Size(26)*ThemeStyles.Number("number.doc.leading_scale",1);
                         if(!string.IsNullOrWhiteSpace(sense.Chinese)) chinese.Inlines.Add(new Run(sense.Chinese){Background=Color("#D7EAE6")});
                         else { chinese.Inlines.Add(new Run(sense.ChineseFailed ? "中文释义暂不可用" : "中文释义待补充")); chinese.FontSize=Size(12); chinese.Foreground=Color("#999999"); }
                         doc.Blocks.Add(chinese);
-                        if(Settings.ShowExamples&&!string.IsNullOrWhiteSpace(sense.Example))
+                        if(!string.IsNullOrWhiteSpace(sense.UsageNote)) doc.Blocks.Add(Paragraph("用法  "+sense.UsageNote,13,"#666666"));
+                        if(sense.Collocations!=null&&sense.Collocations.Count>0) Relation(doc,"搭配",string.Join(" · ",sense.Collocations),"#0874C4");
+                        if(Settings.ShowExamples)
                         {
-                            var example=WordParagraph(sense.Example,18,"#707070"); example.FontFamily=Serif; example.FontStyle=ThemeStyles.FontStyle("fontstyle.doc.italic"); example.Margin=ThemeStyles.Thickness("thickness.doc.spacing.20"); example.Padding=ThemeStyles.Thickness("thickness.doc.spacing.21"); example.BorderThickness=ThemeStyles.Thickness("thickness.doc.spacing.22"); example.BorderBrush=Color("#BADCF5"); doc.Blocks.Add(example);
+                            var examples=sense.Examples??new System.Collections.Generic.List<UsageExample>();
+                            if(examples.Count==0&&!string.IsNullOrWhiteSpace(sense.Example)) examples=new System.Collections.Generic.List<UsageExample>{new UsageExample{Text=sense.Example}};
+                            foreach(var item in examples)
+                            {
+                                var example=Paragraph("",18,"#707070"); example.FontFamily=Serif; example.FontStyle=ThemeStyles.FontStyle("fontstyle.doc.italic"); example.Margin=ThemeStyles.Thickness("thickness.doc.spacing.20"); example.Padding=ThemeStyles.Thickness("thickness.doc.spacing.21"); example.BorderThickness=ThemeStyles.Thickness("thickness.doc.spacing.22"); example.BorderBrush=Color("#BADCF5"); SentenceStyles.Append(example,item.Text,item.Segments); doc.Blocks.Add(example);
+                                if(!string.IsNullOrWhiteSpace(item.Chinese)) {var cn=Paragraph(item.Chinese,14,"#008577");cn.Margin=example.Margin;cn.Padding=example.Padding;cn.BorderThickness=example.BorderThickness;cn.BorderBrush=Color("#BADCF5");doc.Blocks.Add(cn);}
+
+                            }
                         }
                     }
                     var synonyms=group.SelectMany(m=>m.Synonyms).Distinct().ToArray(); var antonyms=group.SelectMany(m=>m.Antonyms).Distinct().ToArray();
@@ -167,11 +178,14 @@ namespace MyDict
                     if(antonyms.Length>0) Relation(doc,"反义词",string.Join(" · ",antonyms),"#9C5666");
                 }
                 if(!string.IsNullOrWhiteSpace(record.Origin)){doc.Blocks.Add(Heading("词源"));doc.Blocks.Add(WordParagraph(record.Origin,14,"#707070"));}
-                if(Settings.ShowDerived){doc.Blocks.Add(Heading("派生与搭配"));doc.Blocks.Add(WordParagraph(record.Derived??"来源暂未提供派生词。",14,"#0874C4"));}
-                if(!string.IsNullOrWhiteSpace(record.Notice))doc.Blocks.Add(Paragraph(record.Notice,13,"#996B43"));
+                if(Settings.ShowDerived){doc.Blocks.Add(Heading("派生与搭配"));var derived=record.Derived;var combinations=record.Meanings.SelectMany(m=>m.Senses).Where(s=>s.Collocations!=null).SelectMany(s=>s.Collocations).Distinct();var related=string.Join(" · ",combinations);if(!string.IsNullOrWhiteSpace(related))derived=(string.IsNullOrWhiteSpace(derived)?"":derived+"\n")+"常见搭配："+related;doc.Blocks.Add(WordParagraph(string.IsNullOrWhiteSpace(derived)?"暂无派生与搭配资料，点击查询更新。":derived,14,"#0874C4"));}
+                if(!string.IsNullOrWhiteSpace(record.Notice)&&record.Notice!="DeepSeek AI 生成的词义与翻译，请结合语境判断。")doc.Blocks.Add(Paragraph(record.Notice,13,"#996B43"));
                 doc.Blocks.Add(Heading("来源与许可"));
+                if(LookupSources.IsDeepSeek(entry)) { doc.Blocks.Add(Paragraph("词义、例句、词形和中文解释由 DeepSeek 生成，并非已核验词典条目。",11,"#777777")); Link(doc,"DeepSeek API","https://api-docs.deepseek.com/"); }
+                else {
                 if(record.Meanings.SelectMany(m=>m.Senses).Any(s=>!string.IsNullOrWhiteSpace(s.Chinese))) doc.Blocks.Add(Paragraph("中文释义按各条英文释义机器翻译（"+(entry.TranslationProvider??"MyMemory")+"）",11,"#777777")); Link(doc,"Free Dictionary API · 英文释义","https://dictionaryapi.dev/"); Link(doc,"Wiktionary · 词形、派生词与复合词（CC BY-SA）","https://en.wiktionary.org/wiki/"+Uri.EscapeDataString(record.Word)+"#English");
                 foreach(var source in record.Sources.Distinct()){var match=Regex.Match(source,@"https?://\S+");if(match.Success)Link(doc,source,match.Value);}
+                }
             }
             Link(doc,(entry.TranslationProvider??"MyMemory")+" · 参考翻译",entry.TranslationUrl??"https://mymemory.translated.net/"); return doc;
         }
@@ -200,6 +214,8 @@ namespace MyDict
         }
     }
 }
+
+
 
 
 

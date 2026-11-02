@@ -2,7 +2,7 @@
 
 简洁的 Windows 中英词典，使用 C# / WPF 开发。
 
-**稳定版：v1.3.0** · 作者：Yance Feng & Codex · [MIT License](LICENSE)
+**当前固定版：v1.4.0（标签 v1.4.0）**；旧版 `v1.3.0` 保留在原标签。 · 作者：Yance Feng & Codex · [MIT License](LICENSE)
 
 ## 功能
 
@@ -19,7 +19,7 @@
 
 ## 运行
 
-下载 GitHub Releases 中的 `MyDict-v1.3.0-win.zip`，解压到可写目录，运行 `MyDict.exe`。
+下载 GitHub Releases 中的 `MyDict-v1.4.0-win.zip`，解压到可写目录，运行 `MyDict.exe`。
 
 需要 Windows 和 .NET Framework 4.8。无需安装额外 NuGet 组件。首次启动会在程序目录创建默认配置。
 
@@ -66,7 +66,7 @@
 .\build.ps1
 ```
 
-输出为 `bin\Unified\MyDict.exe`。运行离线核心检查：
+1.4 开发输出为 `bin\1.4\MyDict.exe`。运行离线核心检查：
 
 ```powershell
 .\tools\Test-Release.ps1
@@ -81,3 +81,18 @@
 ## 许可
 
 应用源码使用 [MIT](LICENSE)。第三方在线词典内容不随发布包分发，也不适用本项目的 MIT 许可；来源与许可链接显示在词条底部。详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+
+## 1.4：DeepSeek API 查词与翻译
+
+输入框右侧勾选 DeepSeek，填好同目录 settings.json 的 DeepSeek.ApiKey 后点击“查询”。API 地址默认 https://api.deepseek.com/chat/completions，默认模型 deepseek-flash，可通过 JSON 修改。
+DeepSeek 在点击“查询”按钮或点击解释中的单词时调用；输入停顿、开关切换、历史导航及 Ctrl+R 不会自动调用 DeepSeek。没有 AI 缓存时显示等待按钮查询的提示；有缓存时直接显示。
+“查询”按钮始终重新联网查询当前选择的来源并更新缓存，不受缓存命中限制。DeepSeek 返回的完整翻译、逐条中英文释义、例句、音标和词形一次性写入结果，不再调用 MyMemory 做二次逐条翻译。
+已查询词条优先读取 DeepSeek 缓存，包括关闭开关后再次输入该词的情况；同词普通来源与 AI 来源分别保留。历史和单词本显示来源，AI 结果页注明模型、查询时间和生成内容属性，避免混标为 Free Dictionary / Wiktionary。
+DeepSeek 参数：Enabled（开关）、ApiKey（本地密钥）、Endpoint（完整 HTTPS 地址）、Model（模型）、TimeoutSeconds（10–300 秒）、MaxTokens（512–16384）。每个字段在 JSON 中都有中文说明。API 密钥不要提交到公开仓库。
+接口参考：[DeepSeek 官方 JSON 输出文档](https://api-docs.deepseek.com/guides/json_mode/)和[模型文档](https://api-docs.deepseek.com/quick_start/pricing/)。模型输出属于 AI 生成内容，未被第三方词典核验。
+已通过模拟接口验证手动调用限制、按钮强制更新、取消旧请求、错误时保留缓存及来源持久化；真实服务调用需要用户自行在本地配置有效密钥。
+
+解释区已隐藏顶部来源/模型/时间行，来源仍写入缓存并在单词本和页脚保留。悬停不再显示文字提示，单词下划线保留；输入区、词头卡片、释义段落和例句的间距已缩小，参数继续由 Styles 管理。
+
+
+1.4 阅读快捷键（窗口获得焦点时）：Ctrl + 加号/减号同步调整解释区与单词本字号，Ctrl + [ / ] 同步调整行距，设置自动保存。输入框回车等同点击查询。DeepSeek 鲸鱼图标蓝色启用、白色关闭；点击查询更新已有缓存。新查询可返回用法、搭配、双语例句和句法着色，旧缓存点击查询后更新。

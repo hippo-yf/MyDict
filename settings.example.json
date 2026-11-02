@@ -1,4 +1,4 @@
-{
+﻿{
   "FontName": "Microsoft YaHei UI",
   "FontSize": 16,
   "DefinitionFontName": "Georgia",
@@ -44,9 +44,26 @@
     "ShowExamples": "是否显示词典例句：true 显示，false 隐藏。",
     "ShowDerived": "是否显示派生词及搭配：true 显示，false 隐藏。",
     "Window": "上次关闭时保存的窗口位置、大小及最大化状态；一般由程序自动维护。",
+    "DeepSeek": "DeepSeek API 查询开关、密钥、接口地址和模型。启用后只在点击查询按钮时调用 API。",
     "Styles": "按用途分组的显示样式；只修改样式键的值，保存后自动重新加载。未填写的键使用内置默认值。",
     "_说明": "中文使用说明，不参与程序配置；可修改说明文字。JSON 不支持 // 注释。",
-    "_配置版本": "配置排版版本，供程序识别分组和说明格式，请保持为 2。"
+    "_配置版本": "配置排版版本，请保持为 3。"
   },
-  "_配置版本": 2
+  "_配置版本": 3,
+  "DeepSeek": {
+    "Enabled": false,
+    "ApiKey": "",
+    "Endpoint": "https://api.deepseek.com/chat/completions",
+    "Model": "deepseek-flash",
+    "TimeoutSeconds": 90,
+    "MaxTokens": 8192,
+    "_说明": {
+      "Enabled": "是否启用 DeepSeek。true 时只允许点击查询按钮调用 API，输入和历史导航只读缓存。",
+      "ApiKey": "DeepSeek API 密钥，保存在本地 JSON 中，请勿公开。",
+      "Endpoint": "完整 HTTPS Chat Completions 接口地址，默认 https://api.deepseek.com/chat/completions。",
+      "Model": "模型名称，默认 deepseek-flash；可按服务提供方文档修改。",
+      "TimeoutSeconds": "请求超时秒数，范围 10–300。",
+      "MaxTokens": "输出 token 上限，范围 512–16384；截断时可适当增大。"
+    }
+  }
 }

@@ -15,15 +15,21 @@ class ReleaseUiTests
  static Entry Sample(string word){var r=new DictionaryRecord{Word=word};var m=new Meaning{PartOfSpeech="n. 名词"};m.Senses.Add(new Sense{Definition="bank and run.",Chinese="测试释义。"});r.Meanings.Add(m);return new Entry{Word=word,Translation="测试",Pair="en|zh-CN",Record=r};}
  static object Field(object target,string name){return target.GetType().GetField(name,Private).GetValue(target);}
  static void Invoke(object target,string name,params object[] args){target.GetType().GetMethod(name,Private).Invoke(target,args);}
+ static void LoadResources(App app)
+ {
+  var xml=new System.Xml.XmlDocument();xml.Load(Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","..","App.xaml")));
+  string resources=xml.SelectSingleNode("//*[local-name()='Application.Resources']").InnerXml;
+  app.Resources=(ResourceDictionary)System.Windows.Markup.XamlReader.Parse("<ResourceDictionary xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>"+resources+"</ResourceDictionary>");
+ }
  [STAThread] static int Main()
  {
   string folder=Path.Combine(Path.GetTempPath(),"mydict-release-"+Guid.NewGuid());Directory.CreateDirectory(folder);
-  var app=new App();app.InitializeComponent();app.ShutdownMode=ShutdownMode.OnExplicitShutdown;MainWindow window=null;
+  var app=new App();LoadResources(app);app.ShutdownMode=ShutdownMode.OnExplicitShutdown;MainWindow window=null;
   try{
    string config=Path.Combine(folder,"settings.json"),cachePath=Path.Combine(folder,"lookup-cache.json");
    typeof(SettingsStore).GetField("FilePath").SetValue(null,config);typeof(LookupCache).GetField("DefaultPath").SetValue(null,cachePath);SettingsStore.Save(new AppSettings());
    var cache=new LookupCache(cachePath);cache.Record(LookupCache.Key("bank","en|zh-CN",new AppSettings()),Sample("bank"));cache.Record(LookupCache.Key("run","en|zh-CN",new AppSettings()),Sample("run"));cache.Save();
-   window=new MainWindow();var store=Field(window,"store");store.GetType().GetField("FilePath").SetValue(store,Path.Combine(folder,"favorites.json"));window.GetType().GetField("entries",Private).SetValue(window,new List<Entry>());Invoke(window,"RefreshList");window.Show();window.UpdateLayout();
+   window=new MainWindow();var store=Field(window,"store");store.GetType().GetField("FilePath").SetValue(store,Path.Combine(folder,"favorites.json"));window.GetType().GetField("entries",Private).SetValue(window,new List<Entry>());Invoke(window,"RefreshList");window.Show();window.UpdateLayout();Check(window.Icon!=null,"App window icon missing");
    var query=(TextBox)window.FindName("Query");Check(query.Text=="run","Startup history restore failed");
    ((Button)window.FindName("BackButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Check(query.Text=="bank","Back failed");
    ((Button)window.FindName("ForwardButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Check(query.Text=="run","Forward failed");
@@ -39,3 +45,5 @@ class ReleaseUiTests
   finally{if(window!=null)window.Close();app.Shutdown();foreach(string file in Directory.GetFiles(folder))File.Delete(file);Directory.Delete(folder);}
  }
 }
+
+

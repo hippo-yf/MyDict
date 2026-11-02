@@ -125,6 +125,7 @@ namespace MyDict
         public static CornerRadius Corner(string key) {return (CornerRadius)values[key];}
         public static FontWeight Weight(string key) {return (FontWeight)values[key];}
         public static FontStyle FontStyle(string key) {return (FontStyle)values[key];}
+        public static Brush Brush(string key) {return (Brush)values[key];}
         public static Brush BrushFor(string value)
         {
             string name=value.StartsWith("#")?"c"+value.Substring(1).ToLowerInvariant():value.ToLowerInvariant();object brush;
@@ -132,6 +133,7 @@ namespace MyDict
         }
     }
 }
+
 
 
 

@@ -25,3 +25,7 @@ tests/merge-init-*/
 /Verify-UI.ps1
 /example.png
 /styles.yaml
+!/tests/DeepSeekTests.cs
+
+# Local private keys must never be committed.
+assets/id_ed25519

@@ -9,6 +9,7 @@ namespace MyDict
         public AboutWindow()
         {
             ThemeStyles.EnsureLoaded();
+            Icon=new System.Windows.Media.Imaging.BitmapImage(new System.Uri("pack://application:,,,/MyDict;component/assets/app-icon.ico",System.UriKind.Absolute));
             Title = "关于拾词"; Width = ThemeStyles.Number("number.about.width",380); Height = ThemeStyles.Number("number.about.height",330); ResizeMode = ResizeMode.NoResize;
             WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
             Background = ThemeStyles.BrushFor("#F5F3FA"); FontFamily = ThemeStyles.Font("font.about.body");

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -23,6 +23,8 @@ namespace MyDict
         private bool cacheWritable=true;
         private string cacheError;
         private AppSettings settings = new AppSettings();
+        private DeepSeekService deepSeek=new DeepSeekService();
+        private bool suppressDeepSeekToggle;
         private FileSystemWatcher settingsWatcher;
         private readonly DispatcherTimer settingsReload = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
         private bool storageAvailable = true;
@@ -83,7 +85,7 @@ namespace MyDict
         {
             if (FavoritesList == null || Filter == null || CountLabel == null) return;
             string filter = Filter.Text.Trim();
-            var all=entries.Concat(cache.AllEntries).GroupBy(e=>(e.Word??"").Trim().ToLowerInvariant()+"|"+e.Pair).Select(g=>g.First()).ToList();
+            var all=entries.Concat(cache.AllEntries).OrderByDescending(LookupSources.IsDeepSeek).ThenByDescending(e=>e.QueriedAtUtc??e.SavedAt).GroupBy(e=>(e.Word??"").Trim().ToLowerInvariant()+"|"+e.Pair).Select(g=>g.First()).ToList();
             var rows=all.Select(e=>new BookRow { Entry=e, IsFavorite=entries.Any(f=>string.Equals(f.Word,e.Word,StringComparison.OrdinalIgnoreCase)&&f.Pair==e.Pair) });
             if(OnlyFavorites?.IsChecked==true) rows=rows.Where(r=>r.IsFavorite);
             FavoritesList.ItemsSource=rows.Where(r=>r.Word.IndexOf(filter,StringComparison.OrdinalIgnoreCase)>=0 || r.Translation.IndexOf(filter,StringComparison.OrdinalIgnoreCase)>=0).ToList();
@@ -95,7 +97,8 @@ namespace MyDict
         {
             public Entry Entry { get; set; }
             public string Word { get { return Entry.Word??""; } }
-            public string Translation { get { return Entry.Translation??""; } }
+            public string Translation { get { return Entry.ShortTranslation; } }
+            public string Source { get { return LookupSources.Label(Entry); } }
             public bool IsFavorite { get; set; }
             public string Star { get { return IsFavorite?"★":"☆"; } }
         }
@@ -107,7 +110,7 @@ namespace MyDict
                         if(Persist(updated))
             {
                 var source=new AppSettings { Provider=row.Entry.TranslationProvider??"MyMemory", LibreUrl=row.Entry.TranslationUrl??settings.LibreUrl };
-                cache.Store(LookupCache.Key(row.Word,row.Entry.Pair??Translator.DetectPair(row.Word),source),row.Entry);SaveCache();RefreshList();
+                cache.Store(LookupCache.KeyForEntry(row.Entry),row.Entry);SaveCache();RefreshList();
                 if(current!=null)SetSaved(entries.Any(f=>string.Equals(f.Word,current.Word,StringComparison.OrdinalIgnoreCase)&&f.Pair==current.Pair));
             }
             e.Handled=true;
@@ -118,21 +121,32 @@ namespace MyDict
             e.Handled=true;BookStar_Click(sender,e);
         }
         private void FavoriteMode_Changed(object sender,RoutedEventArgs e) { RefreshList(); }
-        private async Task SearchAsync(bool forceRefresh=false)
+        private Task SearchAsync(bool forceRefresh=false) { return SearchCoreAsync(forceRefresh,false); }
+        private async Task SearchCoreAsync(bool forceRefresh,bool manual)
         {
             string word = Query.Text.Trim();
             if (word.Length == 0 || composing) return;
             string pair = Translator.DetectPair(word);
             string cacheKey=LookupCache.Key(word,pair,settings);
-            var cached=forceRefresh?null:cache.Find(cacheKey);
-            if(cached!=null) { ShowCached(cached,"本地缓存（Ctrl+R 可联网更新）"); Remember(cacheKey,cached); return; }
+            var cached=forceRefresh?null:cache.FindPreferred(word,pair,settings);
+            if(cached!=null) { ShowCached(cached,"本地缓存（Ctrl+R 可联网更新）"); Remember(LookupCache.KeyForEntry(cached),cached); return; }
+            if(settings.DeepSeek.Enabled&&!manual) { SetState("","点击查询按钮使用 DeepSeek"); return; }
             long version = revision;
             var active = new CancellationTokenSource(); request = active;
             CancellationToken token = active.Token;
-            SetState("…", "查询中");
+            SetState("…",settings.DeepSeek.Enabled?"DeepSeek 查询中":"查询中");
+            SaveButton.IsEnabled=false;
             try
             {
                 if (Encoding.UTF8.GetByteCount(word) > 500) throw new InvalidOperationException("输入过长，请缩短至 500 个 UTF-8 字节以内。");
+                if(settings.DeepSeek.Enabled)
+                {
+                    var result=await deepSeek.LookupAsync(word,settings.DeepSeek,token);
+                    token.ThrowIfCancellationRequested();if(version!=revision)return;
+                    current=result;ResultView.Document=EntryDocument.Build(result);ResultView.ScrollToHome();
+                    SaveButton.IsEnabled=storageAvailable;Remember(LookupCache.KeyForEntry(result),result);
+                    UpdateFavoriteResult(result);SetState("✓","DeepSeek 查询已更新 · "+result.LookupModel);if(cacheError!=null)SetState("!",cacheError);return;
+                }
                 Task<DictionaryRecord> dictionaryTask = pair.StartsWith("en|") && DictionaryService.IsEnglishTerm(word) ? DictionaryService.LookupAsync(word, token) : null;
                 string translated;
                 bool translationAvailable = true;
@@ -151,7 +165,7 @@ namespace MyDict
                 DictionaryRecord record = dictionaryTask == null ? null : await dictionaryTask;
                 token.ThrowIfCancellationRequested();
                 if (version != revision) return;
-                current = new Entry { Word = word, Translation = translated, Pair = pair, SavedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm"), Record = record, DetailNote = note, Details = record?.Format(), TranslationProvider = settings.Provider, TranslationUrl = settings.Provider == "LibreTranslate" ? settings.LibreUrl : "https://mymemory.translated.net/" };
+                current = new Entry { Word = word, Translation = translated, Pair = pair, SavedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm"), Record = record, DetailNote = note, Details = record?.Format(), LookupSource="Free Dictionary / "+settings.Provider, QueriedAtUtc=DateTime.UtcNow.ToString("o"), TranslationProvider = settings.Provider, TranslationUrl = settings.Provider == "LibreTranslate" ? settings.LibreUrl : "https://mymemory.translated.net/" };
                 ResultView.Document = EntryDocument.Build(current); ResultView.ScrollToHome();
                 SaveButton.IsEnabled = false;
                 if(record != null && record.Meanings.Count > 0)
@@ -190,18 +204,10 @@ namespace MyDict
             var updated = entries.Where(x => !(string.Equals(x.Word, current.Word, StringComparison.OrdinalIgnoreCase) && x.Pair == current.Pair)).ToList(); updated.Insert(0, current);
             if (Persist(updated)) { SetSaved(true); SetState("✓", "已收藏"); }
         }
-        private void Favorite_Selected(object sender, SelectionChangedEventArgs e)
+        private void Favorite_Selected(object sender,SelectionChangedEventArgs e)
         {
-            var selected = (FavoritesList.SelectedItem as BookRow)?.Entry;
-            if (selected == null) return;
-            InvalidateQuery(); suppressInput = true;
-            Query.Text = selected.Word; suppressInput = false;
-            current = selected;
-            ResultView.Document = EntryDocument.Build(selected); ResultView.ScrollToHome();
-            SaveButton.IsEnabled = storageAvailable; SetSaved(true);
-            MainTabs.SelectedIndex = 0; SetState("✓", "本地收藏");
-            var sourceSettings=new AppSettings { Provider=selected.TranslationProvider??"MyMemory", LibreUrl=selected.TranslationUrl??settings.LibreUrl };
-            Remember(LookupCache.Key(selected.Word,selected.Pair??Translator.DetectPair(selected.Word),sourceSettings),selected);
+            var selected=(FavoritesList.SelectedItem as BookRow)?.Entry;if(selected==null)return;
+            ShowCached(selected,"本地单词本");Remember(LookupCache.KeyForEntry(current),current);
         }
         private void Tabs_Changed(object sender, SelectionChangedEventArgs e)
         {
@@ -226,6 +232,7 @@ namespace MyDict
         {
             EntryDocument.Settings = settings;
             debounce.Interval = TimeSpan.FromMilliseconds(settings.DelayMs);
+            suppressDeepSeekToggle=true;DeepSeekCheck.IsChecked=settings.DeepSeek.Enabled;suppressDeepSeekToggle=false;
             if (current != null) EntryDocument.Refresh(ResultView,current);
         }
         private void ReloadTheme()
@@ -261,23 +268,13 @@ namespace MyDict
             try
             {
                 var updated = SettingsStore.Load();
-                bool sourceChanged = settings.Provider != updated.Provider || settings.LibreUrl != updated.LibreUrl || settings.ApiKey != updated.ApiKey;
+                bool sourceChanged = settings.Provider != updated.Provider || settings.LibreUrl != updated.LibreUrl || settings.ApiKey != updated.ApiKey || settings.DeepSeek.Enabled!=updated.DeepSeek.Enabled || settings.DeepSeek.Model!=updated.DeepSeek.Model || settings.DeepSeek.Endpoint!=updated.DeepSeek.Endpoint || settings.DeepSeek.ApiKey!=updated.DeepSeek.ApiKey;
                 ThemeStyles.ValidateStyles(updated.Styles);
                 settings = updated; EntryDocument.Settings=updated; ThemeStyles.ApplyStyles(updated.Styles); ApplySettings();
                 if (sourceChanged) { InvalidateQuery(); if (!string.IsNullOrWhiteSpace(Query.Text)) debounce.Start(); }
                 SetState("✓", "JSON 设置已加载");
             }
             catch (Exception ex) { SetState("!", "设置文件无效，已保留当前设置：" + ex.Message); }
-        }
-        private void Settings_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                if (!File.Exists(SettingsStore.FilePath)) SettingsStore.Save(settings);
-                // Pass the path as a single quoted argument; edits are picked up after saving.
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("notepad.exe", "\"" + SettingsStore.FilePath + "\"") { UseShellExecute = true });
-            }
-            catch (Exception ex) { SetState("!", "无法打开设置文件：" + ex.Message); }
         }
         private void SaveWindowLayout()
         {
@@ -288,13 +285,30 @@ namespace MyDict
             }
             catch (Exception ex) { System.Diagnostics.Trace.WriteLine("窗口位置保存失败，保留原设置：" + ex.Message); }
         }
+        private async void Search_Click(object sender,RoutedEventArgs e)
+        {
+            InvalidateQuery();await SearchCoreAsync(true,true);
+        }
+        private void DeepSeek_Changed(object sender,RoutedEventArgs e)
+        {
+            if(suppressDeepSeekToggle || ResultView==null)return;
+            bool enabled=DeepSeekCheck.IsChecked==true;InvalidateQuery();settings.DeepSeek.Enabled=enabled;
+            try {SettingsStore.SetDeepSeekEnabled(enabled);}catch(Exception ex){SetState("!","DeepSeek 开关保存失败："+ex.Message);return;}
+            if(!string.IsNullOrWhiteSpace(Query.Text))debounce.Start();
+            SetState("",enabled?"DeepSeek 已启用；点击查询按钮发送请求":"普通词典自动查询");
+        }
+        private void UpdateFavoriteResult(Entry entry)
+        {
+            int index=entries.FindIndex(f=>string.Equals(f.Word,entry.Word,StringComparison.OrdinalIgnoreCase)&&f.Pair==entry.Pair);
+            if(index<0)return;var updated=new List<Entry>(entries);updated[index]=entry;if(Persist(updated))SetSaved(true);
+        }
         private async void WordLookup(object sender,RoutedEventArgs e)
         {
             var args=e as EntryDocument.WordLookupArgs;
             if(args==null || string.IsNullOrWhiteSpace(args.Word))return;
             InvalidateQuery(); suppressInput=true; Query.Text=args.Word; suppressInput=false;
             MainTabs.SelectedIndex=0; e.Handled=true;
-            await SearchAsync();
+            await SearchCoreAsync(false,true);
         }
         private void UpdateHistoryButtons() { BackButton.IsEnabled=cache.CanBack;ForwardButton.IsEnabled=cache.CanForward; }
         private void SaveCache()
@@ -305,6 +319,7 @@ namespace MyDict
         private void Remember(string key,Entry entry) { cache.Record(key,entry);SaveCache();UpdateHistoryButtons();RefreshList(); }
         private void ShowCached(Entry entry,string hint)
         {
+            entry=cache.FindDeepSeek(entry.Word,entry.Pair??Translator.DetectPair(entry.Word))??entry;
             InvalidateQuery();suppressInput=true;Query.Text=entry.Word;suppressInput=false;current=entry;
             ResultView.Document=EntryDocument.Build(entry);ResultView.ScrollToHome();
             SaveButton.IsEnabled=storageAvailable;
@@ -320,8 +335,27 @@ namespace MyDict
         private void Forward_Click(object sender,RoutedEventArgs e) { NavigateHistory(1); }
         private async void HistoryKeys(object sender,KeyEventArgs e)
         {
+            if(e.Key==Key.Enter&&Query.IsKeyboardFocusWithin&&!composing&&Keyboard.Modifiers==ModifierKeys.None) {e.Handled=true;Search_Click(sender,e);return;}
+            if(AdjustReading(e.Key,Keyboard.Modifiers)) {e.Handled=true;return;}
             if(Keyboard.Modifiers==ModifierKeys.Alt && (e.SystemKey==Key.Left || e.SystemKey==Key.Right)) {NavigateHistory(e.SystemKey==Key.Left?-1:1);e.Handled=true;}
             else if(Keyboard.Modifiers==ModifierKeys.Control && e.Key==Key.R) {InvalidateQuery();e.Handled=true;await SearchAsync(true);}
+        }
+        private bool AdjustReading(Key key,ModifierKeys modifiers)
+        {
+            if(modifiers!=ModifierKeys.Control&&modifiers!=(ModifierKeys.Control|ModifierKeys.Shift))return false;
+            bool font=key==Key.OemPlus||key==Key.Add||key==Key.OemMinus||key==Key.Subtract;
+            bool leading=key==Key.OemOpenBrackets||key==Key.OemCloseBrackets;
+            if(!font&&!leading)return false;
+            double direction=key==Key.OemMinus||key==Key.Subtract||key==Key.OemOpenBrackets?-1:1;
+            string scaleKey=font?"number.doc.scale":"number.doc.leading_scale";
+            double previous=ThemeStyles.Number(scaleKey,1),next=Math.Max(0.65,Math.Min(2.2,previous+direction*(font?0.05:0.1))),ratio=next/previous;
+            var changes=new System.Collections.Generic.Dictionary<string,string>();
+            changes[scaleKey]=next.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            foreach(string name in new[]{"number.book.word_size","number.book.translation_size","number.book.word_line_height","number.book.translation_line_height"})
+                if(font||name.Contains("line_height"))changes[name]=(ThemeStyles.Number(name)*ratio).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            try {SettingsStore.PatchStyles(changes);settings.Styles=SettingsStore.Load().Styles;ThemeStyles.ApplyStyles(settings.Styles);}
+            catch(Exception ex){SetState("!","保存阅读样式失败："+ex.Message);}
+            return true;
         }
         private void About_Click(object sender, RoutedEventArgs e) { new AboutWindow { Owner = this }.ShowDialog(); }
         private void DragWindow(object sender, MouseButtonEventArgs e) { if (e.ClickCount == 2) Maximize_Click(sender, e); else if (e.LeftButton == MouseButtonState.Pressed) DragMove(); }
@@ -330,6 +364,9 @@ namespace MyDict
         private void Close_Click(object sender, RoutedEventArgs e) { Close(); }
     }
 }
+
+
+
 
 
 

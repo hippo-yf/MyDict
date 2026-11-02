@@ -34,7 +34,8 @@ namespace MyDict
                 {
                     b.AppendLine((++i) + ". " + sense.Definition);
                     if (!string.IsNullOrWhiteSpace(sense.Chinese)) b.AppendLine("   中文释义：" + sense.Chinese);
-                    if (!string.IsNullOrWhiteSpace(sense.Example)) b.AppendLine("   例句：" + sense.Example);
+                    if(sense.Examples!=null && sense.Examples.Count>0) { foreach(var example in sense.Examples) { b.AppendLine("   例句："+example.Text);if(!string.IsNullOrWhiteSpace(example.Chinese))b.AppendLine("   "+example.Chinese);if(!string.IsNullOrWhiteSpace(example.GrammarNote))b.AppendLine("   语法："+example.GrammarNote); } } else if (!string.IsNullOrWhiteSpace(sense.Example)) b.AppendLine("   例句：" + sense.Example);
+                    if(!string.IsNullOrWhiteSpace(sense.UsageNote))b.AppendLine("   用法："+sense.UsageNote);
                 }
                 if (meaning.Synonyms.Count > 0) b.AppendLine("同义词：" + string.Join(", ", meaning.Synonyms));
                 if (meaning.Antonyms.Count > 0) b.AppendLine("反义词：" + string.Join(", ", meaning.Antonyms));
@@ -54,7 +55,7 @@ namespace MyDict
         public List<string> Synonyms { get; set; } = new List<string>();
         public List<string> Antonyms { get; set; } = new List<string>();
     }
-    public class Sense { public string Definition { get; set; } public string Example { get; set; } public string Chinese { get; set; } public string ChineseSource { get; set; } public bool ChineseFailed { get; set; } }
+    public class Sense { public string Definition { get; set; } public string Example { get; set; } public string Chinese { get; set; } public string ChineseSource { get; set; } public bool ChineseFailed { get; set; } public List<GrammarSegment> DefinitionSegments {get;set;} = new List<GrammarSegment>(); public List<UsageExample> Examples {get;set;} = new List<UsageExample>(); public string UsageNote {get;set;} public List<string> Collocations {get;set;} = new List<string>(); }
     public static class DictionaryService
     {
         static DictionaryService() { ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12; Client.DefaultRequestHeaders.UserAgent.ParseAdd("MyDict/1.1 (personal desktop dictionary)"); }
@@ -158,6 +159,7 @@ namespace MyDict
         }
     }
 }
+
 
 
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -16,6 +16,9 @@ namespace MyDict
     {
         public string Word { get; set; }
         public string Translation { get; set; }
+        public string Summary { get; set; }
+        [System.Web.Script.Serialization.ScriptIgnore]
+        public string ShortTranslation { get { var text=string.IsNullOrWhiteSpace(Summary)?Translation:Summary; text=(text??"").Replace("\r"," ").Replace("\n"," ").Trim();return text.Length>80?text.Substring(0,79)+"…":text; } }
         public string Pair { get; set; }
         public string SavedAt { get; set; }
         public string Details { get; set; }
@@ -23,6 +26,10 @@ namespace MyDict
         public string DetailNote { get; set; }
         public string TranslationProvider { get; set; }
         public string TranslationUrl { get; set; }
+        public string LookupSource { get; set; }
+        public string LookupModel { get; set; }
+        public string QueryEndpoint { get; set; }
+        public string QueriedAtUtc { get; set; }
     }
     public static class Translator
     {
@@ -89,6 +96,7 @@ namespace MyDict
         }
     }
 }
+
 
 
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -19,9 +19,10 @@ namespace MyDict
         public bool ShowExamples { get; set; } = true;
         public bool ShowDerived { get; set; } = true;
         public WindowLayout Window { get; set; }
+        public DeepSeekOptions DeepSeek { get; set; } = new DeepSeekOptions();
         [ScriptIgnore] public System.Collections.Generic.Dictionary<string,string> Styles { get; set; }
-        public void Validate()
-        {
+        public void Validate() {
+            if(DeepSeek==null)DeepSeek=new DeepSeekOptions();DeepSeek.Validate();
             if (string.IsNullOrWhiteSpace(FontName)) throw new InvalidOperationException("请选择字体。");
             if (double.IsNaN(FontSize) || double.IsInfinity(FontSize) || FontSize < 12 || FontSize > 28) throw new InvalidOperationException("字号范围为 12–28。");
             if (DelayMs < 300 || DelayMs > 3000) throw new InvalidOperationException("查询延迟范围为 300–3000 毫秒。");
@@ -62,6 +63,24 @@ namespace MyDict
             if (raw.TryGetValue("ApiKey", out manualKey) && !string.IsNullOrWhiteSpace(Convert.ToString(manualKey))) settings.ApiKey = Convert.ToString(manualKey);
             else if (!string.IsNullOrEmpty(settings.ProtectedApiKey)) settings.ApiKey = Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(settings.ProtectedApiKey), null, DataProtectionScope.CurrentUser));
             return settings;
+        }
+        public static void SetDeepSeekEnabled(bool enabled)
+        {
+            var serializer=new JavaScriptSerializer();var root=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(FilePath,Encoding.UTF8));
+            if(root==null)throw new InvalidOperationException("设置文件为空。");object raw;
+            var options=root.TryGetValue("DeepSeek",out raw)?raw as System.Collections.Generic.Dictionary<string,object>:null;
+            if(options==null)options=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(serializer.Serialize(new DeepSeekOptions()));
+            options["Enabled"]=enabled;root["DeepSeek"]=options;ConfigLayout.Decorate(root);
+            File.WriteAllText(FilePath+".tmp",FormatJson(serializer.Serialize(root)),new UTF8Encoding(false));File.Replace(FilePath+".tmp",FilePath,FilePath+".bak");
+        }
+        public static void PatchStyles(System.Collections.Generic.Dictionary<string,string> changes)
+        {
+            var serializer=new JavaScriptSerializer();
+            var root=serializer.Deserialize<System.Collections.Generic.Dictionary<string,object>>(File.ReadAllText(FilePath,Encoding.UTF8));
+            object raw;var styles=root.TryGetValue("Styles",out raw)?ConfigLayout.FlattenStyles(raw):ThemeStyles.DefaultStyles();
+            foreach(var item in changes)styles[item.Key]=item.Value;
+            ThemeStyles.ValidateStyles(styles);root["Styles"]=ConfigLayout.GroupStyles(styles);ConfigLayout.Decorate(root);
+            File.WriteAllText(FilePath+".tmp",FormatJson(serializer.Serialize(root)),new UTF8Encoding(false));File.Replace(FilePath+".tmp",FilePath,FilePath+".bak");
         }
         public static string FormatJson(string json)
         {
@@ -121,6 +140,7 @@ namespace MyDict
         }
     }
 }
+
 
 
 
