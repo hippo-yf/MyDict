@@ -72,7 +72,7 @@ namespace MyDict
         public static FlowDocument Message(string title,string subtitle)
         {
             var doc=NewDocument();
-            var p=Paragraph(title,30,"#0874C4"); p.FontFamily=Serif; p.FontWeight=ThemeStyles.Weight("weight.doc.bold"); doc.Blocks.Add(p);
+            if(!string.IsNullOrWhiteSpace(title)){var p=Paragraph(title,30,"#0874C4"); p.FontFamily=Serif; p.FontWeight=ThemeStyles.Weight("weight.doc.bold"); doc.Blocks.Add(p);}
             doc.Blocks.Add(Paragraph(subtitle,15,"#777777")); return doc;
         }
         private static FlowDocument NewDocument() {

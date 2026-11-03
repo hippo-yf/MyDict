@@ -1,5 +1,6 @@
 #include "entryrenderer.h"
 #include "core.h"
+#include "appfonts.h"
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -55,7 +56,7 @@ public:
         if (!styles.contains("number.doc.leading_scale")) leading = .85;
     }
     QString font(const QString &key, const QString &fallback) const {
-        return escape(styles.value(key).toString(fallback));
+        return escape(AppFonts::resolve(styles.value(key).toString(fallback)));
     }
     QString clr(const QString &hex) const { return color(styles, "color.c" + hex.mid(1).toLower(), hex); }
     QString roleColor(const QString &role,const QString &fallback="#363636") const {

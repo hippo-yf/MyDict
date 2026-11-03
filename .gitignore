@@ -49,3 +49,5 @@ cache-sync/
 !/tests/SharedCacheTests.cs
 !/tests/CrossClientCacheTests.cs
 !/tests/SharedMaintenanceTests.cs
+# Generated WPF per-family font collections (may link local licensed fonts).
+.font-cache/

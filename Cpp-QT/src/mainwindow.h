@@ -37,6 +37,9 @@ private:
     std::shared_ptr<QLockFile> profileLock;
     std::shared_ptr<std::atomic_bool> syncCanceled;
     QJsonObject currentEntry;
+    QString messageTitle, messageText;
+    QString fontCoverageKey;
+    bool needsChineseFallback = false;
     QString selectedPart;
     quint64 requestId = 0, bookRevision = 0, dirtyGeneration = 0;
     int pendingWrites = 0, offset = 0, total = 0;
@@ -64,6 +67,8 @@ private:
     void createUi();
     void initialize();
     void applySettings(bool restoreWindow = false);
+    void updateFonts(bool includePhonetic);
+    void showMessage(const QString &title, const QString &message);
     void persistWindow();
     void reloadConfig();
     void requestIdentityChange();

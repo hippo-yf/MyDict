@@ -18,6 +18,25 @@ namespace MyDict
         public static string LastError {get;private set;}
         private static Dictionary<string,object> values;
         private static Dictionary<string,string> defaults;
+        private static ResourceDictionary fontResources;
+        private sealed class FontRequest
+        {
+            private readonly string name;
+            private FontFamily family;
+            public FontRequest(string value) { name=value; }
+            public FontFamily Get() { return family??(family=AppFonts.Resolve(name)); }
+        }
+        private sealed class LazyFontResources : ResourceDictionary
+        {
+            // WPF calls this for a resource actually requested by a control.
+            // Merely storing/validating unused font.* settings performs no I/O.
+            protected override void OnGettingValue(object key,ref object value,out bool canCache)
+            {
+                var request=value as FontRequest;
+                if(request!=null) { value=request.Get();canCache=true; }
+                else base.OnGettingValue(key,ref value,out canCache);
+            }
+        }
         private static string DefaultText()
         {
             using(var stream=typeof(ThemeStyles).Assembly.GetManifestResourceStream("MyDict.styles.defaults.json"))
@@ -26,8 +45,7 @@ namespace MyDict
         public static void EnsureLoaded()
         {
             if(values!=null)return;
-            defaults=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string,string>>(DefaultText());
-            Apply(defaults);
+            EnsureDefaults();
             try
             {
                 SettingsStore.Load();
@@ -35,9 +53,10 @@ namespace MyDict
                 ConfigLayout.Upgrade(FilePath);
                 Reload();
             }
-            catch(Exception ex){LastError=ex.Message;}
+            catch(Exception ex){Apply(defaults);LastError=ex.Message;}
         }
-        public static Dictionary<string,string> DefaultStyles() { if(defaults==null)EnsureLoaded();return new Dictionary<string,string>(defaults); }
+        private static void EnsureDefaults() { if(defaults==null)defaults=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string,string>>(DefaultText()); }
+        public static Dictionary<string,string> DefaultStyles() { EnsureDefaults();return new Dictionary<string,string>(defaults); }
         public static void MigrateSettings(string path,string oldStylesPath)
         {
             var serializer=new System.Web.Script.Serialization.JavaScriptSerializer();
@@ -52,6 +71,7 @@ namespace MyDict
         }
         private static Dictionary<string,string> Merge(Dictionary<string,string> overrides)
         {
+            EnsureDefaults();
             var merged=new Dictionary<string,string>(defaults);
             if(overrides!=null)foreach(var item in overrides)
             {if(!defaults.ContainsKey(item.Key))throw new InvalidOperationException("未知样式键："+item.Key);merged[item.Key]=item.Value;}
@@ -90,7 +110,7 @@ namespace MyDict
             {
                 case "number": double number=value=="Auto"?double.NaN:double.Parse(value,CultureInfo.InvariantCulture);if(double.IsInfinity(number)||number<0)throw new InvalidOperationException("尺寸须为非负有限值");if(key.Contains("opacity") && number>1)throw new InvalidOperationException("透明度须在 0–1 之间");if((key.Contains("size")||key.Contains("scale")||key.Contains("line_spacing"))&&(double.IsNaN(number)||number<=0))throw new InvalidOperationException("字号与缩放须大于 0");return number;
                 case "color":return (Color)ColorConverter.ConvertFromString(value);
-                case "font":if(string.IsNullOrWhiteSpace(value))throw new InvalidOperationException("字体不可为空");return AppFonts.Resolve(value);
+                case "font":if(string.IsNullOrWhiteSpace(value)||value.Any(char.IsControl))throw new InvalidOperationException("字体名称不可为空或包含控制字符");return new FontRequest(value.Trim());
                 case "weight":return new FontWeightConverter().ConvertFromInvariantString(value);
                 case "fontstyle":return new FontStyleConverter().ConvertFromInvariantString(value);
                 case "thickness":return new ThicknessConverter().ConvertFromInvariantString(value);
@@ -117,10 +137,21 @@ namespace MyDict
             }
             // Validate the complete document before touching live resources.
             values=converted;
-            foreach(var item in converted)Application.Current.Resources[item.Key]=item.Value;
+            var lazyFonts=new LazyFontResources();
+            foreach(var item in converted)if(item.Value is FontRequest)lazyFonts[item.Key]=item.Value;
+            var resources=Application.Current.Resources;
+            // Font resources live in their own lazy dictionary. The actual WPF
+            // family is created only when that key is consumed by the GUI.
+            resources.MergedDictionaries.Add(lazyFonts);
+            if(fontResources!=null)resources.MergedDictionaries.Remove(fontResources);
+            fontResources=lazyFonts;
+            foreach(var item in converted){
+                if(item.Value is FontRequest) { if(resources.Contains(item.Key))resources.Remove(item.Key); }
+                else resources[item.Key]=item.Value;
+            }
         }
         public static double Number(string key,double fallback=16) {object v;return values!=null&&values.TryGetValue(key,out v)?(double)v:fallback;}
-        public static FontFamily Font(string key) {return (FontFamily)values[key];}
+        public static FontFamily Font(string key) {var value=values[key];var request=value as FontRequest;return request!=null?request.Get():(FontFamily)value;}
         public static Thickness Thickness(string key) {return (Thickness)values[key];}
         public static CornerRadius Corner(string key) {return (CornerRadius)values[key];}
         public static FontWeight Weight(string key) {return (FontWeight)values[key];}

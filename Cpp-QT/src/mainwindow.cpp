@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "entryrenderer.h"
+#include "appfonts.h"
 #include "services.h"
 #include "sync.h"
 #include <QtConcurrent/QtConcurrentRun>
@@ -24,8 +25,6 @@
 #include <QWindow>
 #include <QMouseEvent>
 #include <QCloseEvent>
-#include <QFontDatabase>
-#include <QDirIterator>
 #include <QSvgRenderer>
 #include <QPainter>
 #include <QPainterPath>
@@ -40,6 +39,8 @@
 #include <QSizeGrip>
 #include <QSignalBlocker>
 #include <QAbstractButton>
+#include <QTextLayout>
+#include <QGlyphRun>
 #include <functional>
 #include <exception>
 #include <stdexcept>
@@ -100,11 +101,21 @@ QPoint globalPoint(QMouseEvent *e) {
     return e->globalPos();
 #endif
 }
-void loadLocalFonts(const QString &directory) {
-    QDirIterator it(directory + "/fonts", {"*.ttf", "*.otf", "*.ttc"}, QDir::Files, QDirIterator::Subdirectories);
-    while (it.hasNext()) QFontDatabase::addApplicationFont(it.next());
-}
 Settings loadedSettings(QString directory){Settings s(directory);s.load();return s;}
+bool hasChineseGlyphs(const QString &family) {
+    // Shape a short sample through the normal system fallback chain. Checking
+    // just the primary face would needlessly load Noto for Latin UI fonts on
+    // systems that already have a suitable Chinese fallback installed.
+    QTextLayout layout(QStringLiteral("拾词查询收藏释义"),QFont(AppFonts::resolve(family)));
+    layout.beginLayout();
+    auto line=layout.createLine();if(line.isValid())line.setLineWidth(10000);
+    layout.endLayout();
+    bool found=false;
+    for(const auto &run:layout.glyphRuns())for(auto glyph:run.glyphIndexes()){
+        found=true;if(glyph==0)return false;
+    }
+    return found;
+}
 }
 
 MainWindow::MainWindow(QString dataDirectory, QWidget *parent)
@@ -116,11 +127,7 @@ MainWindow::MainWindow(QString dataDirectory, QWidget *parent)
     setObjectName("MyDictWindow"); setWindowTitle(QStringLiteral("拾词 MyDict"));
     setWindowIcon(QIcon(":/app-icon.png"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
-    loadLocalFonts(settings.directory);
-    if (settings.directory != QCoreApplication::applicationDirPath()) loadLocalFonts(QCoreApplication::applicationDirPath());
-#ifdef Q_OS_MAC
-    loadLocalFonts(QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("../Resources"));
-#endif
+    updateFonts(false);
     createUi(); applySettings(true);
     online = new OnlineService;
     online->moveToThread(&networkThread);
@@ -130,7 +137,7 @@ MainWindow::MainWindow(QString dataDirectory, QWidget *parent)
     connect(online, &OnlineService::ready, this, &MainWindow::receiveEntry);
     connect(online, &OnlineService::failed, this, [this](quint64 id, QString message) {
         if (id != requestId) return; query->setText(QStringLiteral("查询")); toast(message, true);
-        if (currentEntry.isEmpty()) browser->setHtml(EntryRenderer::message(QStringLiteral("暂未查到结果"), message, settings.data));
+        if (currentEntry.isEmpty()) showMessage(QStringLiteral("暂未查到结果"), message);
     });
     networkThread.start();
     configWatcher = new QFileSystemWatcher(this); configWatcher->addPath(settings.directory);
@@ -186,7 +193,7 @@ void MainWindow::createUi() {
     star = makeButton("favoriteButton", QStringLiteral("收藏或取消收藏当前词"), "star"); star->setEnabled(false); bar->addWidget(star);
     copy = makeButton("copyButton", QStringLiteral("复制当前释义"), "copy"); copy->setEnabled(false); bar->addWidget(copy);
     lookupLayout->addLayout(bar);
-    browser = new EntryBrowser; browser->setObjectName("entryBrowser"); browser->document()->setDocumentMargin(6); browser->setHtml(EntryRenderer::message(QStringLiteral("拾词"), QStringLiteral("输入中文或英文，即可开始查询。"), settings.data)); lookupLayout->addWidget(browser,1);
+    browser = new EntryBrowser; browser->setObjectName("entryBrowser"); browser->document()->setDocumentMargin(6); showMessage(QStringLiteral("拾词"), QStringLiteral("输入中文或英文，即可开始查询。")); lookupLayout->addWidget(browser,1);
     pages->addWidget(lookupPage);
     auto *bookPage = new QWidget; auto *bookLayout = new QVBoxLayout(bookPage); bookLayout->setContentsMargins(10,5,10,5); bookLayout->setSpacing(4);
     auto *bookBar = new QHBoxLayout; bookBar->setSpacing(6);
@@ -251,14 +258,45 @@ void MainWindow::initialize() {
         if(!initial.entry.isEmpty()&&input->text().isEmpty()){QSignalBlocker block(input);input->setText(initial.entry.value("Word").toString());showEntry(initial.entry);}
         if(pages->currentIndex()==1)refreshBook();
         if(settings.data.value("CacheSync").toObject().value("Enabled").toBool(false))runSync(true);
-    },[this](QString e) {toast(e,true);browser->setHtml(EntryRenderer::message(QStringLiteral("无法打开词库"),e,settings.data));});
+    },[this](QString e) {toast(e,true);showMessage(QStringLiteral("无法打开词库"),e);});
+}
+
+void MainWindow::updateFonts(bool includePhonetic) {
+    // Only keys consumed by this UI/HTML renderer belong here. WPF-only keys,
+    // compatibility FontName fields and unrelated font files are not loaded.
+    const auto ui=styleValue(settings.data,"font.mainwindow.window.1.fontfamily","Microsoft YaHei UI");
+    const auto body=styleValue(settings.data,"font.doc.body","Microsoft YaHei UI");
+    QSet<QString> families{ui,body,
+        styleValue(settings.data,"font.doc.serif","Georgia")};
+    if(includePhonetic)families.insert(styleValue(settings.data,"font.doc.phonetic","Segoe UI"));
+    QStringList directories{QDir(settings.directory).filePath("fonts")};
+    directories.append(QDir(QCoreApplication::applicationDirPath()).filePath("fonts"));
+#ifdef Q_OS_MAC
+    directories.append(QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("../Resources/fonts"));
+#endif
+    const auto key=ui+"\n"+body+"\n"+directories.join('\n');
+    const bool recheck=fontCoverageKey!=key;
+    if(recheck){fontCoverageKey=key;needsChineseFallback=false;}
+    if(needsChineseFallback)families.insert("Noto Sans SC");
+    AppFonts::apply(families,directories);
+    if(recheck&&(!hasChineseGlyphs(ui)||!hasChineseGlyphs(body))){
+        // The bundled CJK face is necessary only when these actual text fonts
+        // and the system fallback chain cannot render Chinese.
+        needsChineseFallback=true;families.insert("Noto Sans SC");
+        AppFonts::apply(families,directories);
+    }
+}
+void MainWindow::showMessage(const QString &title,const QString &message) {
+    messageTitle=title;messageText=message;updateFonts(false);
+    browser->setHtml(EntryRenderer::message(title,message,settings.data));
 }
 
 void MainWindow::applySettings(bool restoreWindow) {
+    updateFonts(!currentEntry.value("Record").toObject().value("Phonetic").toString().isEmpty());
     auto value=[this](QString key,QString fallback){return styleValue(settings.data,key,fallback);};
     auto validColor=[&](QString key,QString fallback){QColor c(value(key,fallback));return c.isValid()?c.name():fallback;};
     const QString purple=validColor("color.c30234d","#30234D"), foreground=validColor("color.c272438","#272438"), backgroundColor=validColor("color.cf5f3fa","#F5F3FA"),accent=validColor("color.c5c4bb7","#5C4BB7");
-    const QString family=value("font.mainwindow.window.1.fontfamily","Microsoft YaHei UI");
+    const QString family=AppFonts::resolve(value("font.mainwindow.window.1.fontfamily","Microsoft YaHei UI"));
     QFont uiFont(family);uiFont.setPixelSize(qRound(styleNumber(settings.data,"number.mainwindow.window.1.fontsize",14)));uiFont.setStyleStrategy(QFont::PreferAntialias);setFont(uiFont);
     setStyleSheet(QStringLiteral(
         "QMainWindow,QWidget#root{background:%1;color:%2;}"
@@ -287,6 +325,7 @@ void MainWindow::applySettings(bool restoreWindow) {
         ).arg(backgroundColor,foreground,purple,accent));
     updateDeepSeek();
     if(!currentEntry.isEmpty()){int scroll=browser->verticalScrollBar()->value();browser->setHtml(EntryRenderer::render(currentEntry,settings.data,selectedPart));browser->verticalScrollBar()->setValue(scroll);}
+    else showMessage(messageTitle,messageText);
     if(restoreWindow) {
         auto saved=settings.data.value("Window").toObject();
         int width=qRound(saved.value("Width").toDouble(styleNumber(settings.data,"number.mainwindow.window.1.width",650)));
@@ -329,7 +368,7 @@ void MainWindow::requestIdentityChange(){
     switchingIdentity=true;initialized=false;++requestId;++bookRevision;emit cancelOnline();inputDelay->stop();filterDelay->stop();
     if(syncCanceled)syncCanceled->store(true);
     pages->setEnabled(false);currentEntry={};selectedPart.clear();book->clear();
-    browser->setHtml(EntryRenderer::message(QStringLiteral("正在切换词库"),settings.username(),settings.data));
+    showMessage(QStringLiteral("正在切换词库"),settings.username());
     toast(QStringLiteral("正在安全切换用户词库…"));
     QTimer::singleShot(0,this,&MainWindow::changeIdentity);
 }
@@ -357,7 +396,7 @@ void MainWindow::changeIdentity(){
                 switchingIdentity=false;initialized=true;pages->setEnabled(true);input->setEnabled(true);query->setEnabled(true);star->setEnabled(false);copy->setEnabled(false);query->setText(QStringLiteral("查询"));
                 {QSignalBlocker block(input);input->setText(initial.entry.value("Word").toString());}
                 currentEntry={};selectedPart.clear();
-                if(initial.entry.isEmpty())browser->setHtml(EntryRenderer::message(QStringLiteral("拾词"),QStringLiteral("输入中文或英文，即可开始查询。"),settings.data));else showEntry(initial.entry);
+                if(initial.entry.isEmpty())showMessage(QStringLiteral("拾词"),QStringLiteral("输入中文或英文，即可开始查询。"));else showEntry(initial.entry);
                 if(initial.dirty)dirty();updateHistory();if(pages->currentIndex()==1)refreshBook();toast(QStringLiteral("已切换用户词库：")+targetUser);
                 if(settings.data.value("CacheSync").toObject().value("Enabled").toBool())runSync(true);
             },[this](QString error){writeFinished();if(pendingClose)return;switchingIdentity=false;pages->setEnabled(true);toast(error,true);initialize();});
@@ -370,7 +409,7 @@ void MainWindow::lookup(bool force,bool manual,bool link) {
     if(!initialized||pendingClose)return;
     inputDelay->stop();QString text=input->text().trimmed();
     ++requestId;emit cancelOnline();quint64 revision=requestId;
-    if(text.isEmpty()){currentEntry={};selectedPart.clear();favorite=false;star->setEnabled(false);copy->setEnabled(false);browser->setHtml(EntryRenderer::message(QStringLiteral("拾词"),QStringLiteral("输入中文或英文，即可开始查询。"),settings.data));return;}
+    if(text.isEmpty()){currentEntry={};selectedPart.clear();favorite=false;star->setEnabled(false);copy->setEnabled(false);showMessage(QStringLiteral("拾词"),QStringLiteral("输入中文或英文，即可开始查询。"));return;}
     if(text.toUtf8().size()>500){toast(QStringLiteral("单次查询最多 500 个 UTF-8 字节，请缩短输入。"),true);return;}
     const QString pair=detectPair(text);
     if(removingWords.contains(identity(text,pair))){toast(QStringLiteral("正在移除该词，请稍后查询。"));return;}
@@ -390,7 +429,7 @@ void MainWindow::lookup(bool force,bool manual,bool link) {
             background(this,[db,entry]()mutable{db.store(entry,true);return true;},[this,revision,entry](bool){writeFinished();if(revision==requestId)showEntry(entry);updateHistory();},[this](QString e){writeFinished();toast(e,true);});return;
         }
         if(ai&&!manual&&!link){
-            if(currentEntry.value("Word").toString()!=text){currentEntry={};selectedPart.clear();star->setEnabled(false);copy->setEnabled(false);browser->setHtml(EntryRenderer::message(text,QStringLiteral("点击查询或按回车，使用 DeepSeek 获取释义。"),settings.data));}
+            if(currentEntry.value("Word").toString()!=text){currentEntry={};selectedPart.clear();star->setEnabled(false);copy->setEnabled(false);showMessage(text,QStringLiteral("点击查询或按回车，使用 DeepSeek 获取释义。"));}
             return;
         }
         launchOnline(revision,text,ai);
@@ -398,7 +437,7 @@ void MainWindow::lookup(bool force,bool manual,bool link) {
 }
 void MainWindow::launchOnline(quint64 revision,const QString &text,bool ai){
     if(revision!=requestId)return;query->setText(QStringLiteral("查询中"));
-    if(currentEntry.value("Word").toString()!=text){currentEntry={};selectedPart.clear();star->setEnabled(false);copy->setEnabled(false);browser->setHtml(EntryRenderer::message(text,QStringLiteral("正在查询…"),settings.data));}
+    if(currentEntry.value("Word").toString()!=text){currentEntry={};selectedPart.clear();star->setEnabled(false);copy->setEnabled(false);showMessage(text,QStringLiteral("正在查询…"));}
     emit onlineLookup(revision,text,settings.data,ai);
 }
 void MainWindow::receiveEntry(quint64 revision,QJsonObject entry){
@@ -408,6 +447,7 @@ void MainWindow::receiveEntry(quint64 revision,QJsonObject entry){
 }
 void MainWindow::showEntry(const QJsonObject &entry,bool refreshFavorite){
     bool changed=currentEntry.value("Word")!=entry.value("Word");currentEntry=entry;if(changed)selectedPart.clear();
+    updateFonts(!entry.value("Record").toObject().value("Phonetic").toString().isEmpty());
     if(!selectedPart.isEmpty()){bool found=false;for(auto meaning:entry.value("Record").toObject().value("Meanings").toArray())if(meaning.toObject().value("PartOfSpeech").toString()==selectedPart){found=true;break;}if(!found)selectedPart.clear();}
     browser->setHtml(EntryRenderer::render(entry,settings.data,selectedPart));query->setText(QStringLiteral("查询"));copy->setEnabled(true);star->setEnabled(false);
     if(refreshFavorite){auto db=database;auto word=entry.value("Word").toString(),pair=entry.value("Pair").toString();auto id=requestId;background(this,[db,word,pair]{return db.isFavorite(word,pair);},[this,id,word,pair](bool saved){if(id!=requestId||identity(currentEntry.value("Word").toString(),currentEntry.value("Pair").toString())!=identity(word,pair))return;favorite=saved;star->setIcon(vectorIcon(saved?"star-filled":"star",QColor("#8A67C1")));star->setEnabled(true);},[this](QString e){toast(e,true);});}
@@ -429,7 +469,7 @@ void MainWindow::refreshBook(){
         double wordSize=styleNumber(settings.data,"number.book.word_size",12.6),translationSize=styleNumber(settings.data,"number.book.translation_size",10.8);
         int wordHeight=qMax(qRound(styleNumber(settings.data,"number.book.word_line_height",15.3)),qRound(wordSize+2));
         int translationHeight=qMax(qRound(styleNumber(settings.data,"number.book.translation_line_height",13.77)),qRound(translationSize+2));
-        const QString family=styleValue(settings.data,"font.doc.body","Microsoft YaHei UI");
+        const QString family=AppFonts::resolve(styleValue(settings.data,"font.doc.body","Microsoft YaHei UI"));
         auto padding=styleValue(settings.data,"thickness.book.row_padding","8,2").split(',');
         int left=8,right=8,top=2,bottom=2;
         if(padding.size()==2){left=right=qBound(0,padding[0].toInt(),30);top=bottom=qBound(0,padding[1].toInt(),30);}
@@ -466,7 +506,7 @@ void MainWindow::removeRow(BookRow row){
     // Cancel before enqueueing the DELETE. A reply arriving later cannot recreate
     // this word; the database also rejects data older than the deletion tombstone.
     if(identity(currentEntry.value("Word").toString(),currentEntry.value("Pair").toString())==key||identity(input->text(),detectPair(input->text()))==key){
-        ++requestId;emit cancelOnline();inputDelay->stop();currentEntry={};selectedPart.clear();star->setEnabled(false);copy->setEnabled(false);query->setText(QStringLiteral("查询"));browser->setHtml(EntryRenderer::message(QStringLiteral("已移除"),QStringLiteral("重新查询可再次添加该词。"),settings.data));
+        ++requestId;emit cancelOnline();inputDelay->stop();currentEntry={};selectedPart.clear();star->setEnabled(false);copy->setEnabled(false);query->setText(QStringLiteral("查询"));showMessage(QStringLiteral("已移除"),QStringLiteral("重新查询可再次添加该词。"));
     }
     auto db=database;++pendingWrites;
     background(this,[db,row]()mutable{return db.remove(row.id);},[this,key](bool removed){removingWords.remove(key);writeFinished();if(removed){dirty();toast(QStringLiteral("已移除该词及所有来源释义"));}else toast(QStringLiteral("该词已收藏或已不存在，请先取消收藏。"));refreshBook();updateHistory();},[this,key](QString e){removingWords.remove(key);writeFinished();toast(e,true);refreshBook();});
@@ -482,7 +522,7 @@ void MainWindow::runSync(bool pullOnly){
     if(settings.databasePath()!=database.path()){toast(QStringLiteral("请重新启动，应用新用户身份后再同步。"),true);return;}
     syncing=true;sync->setEnabled(false);sync->setText(QStringLiteral("同步中"));QString directory=settings.directory,dbPath=database.path(),user=activeUsername;QJsonObject config=settings.data;const auto generation=dirtyGeneration;syncCanceled=std::make_shared<std::atomic_bool>(false);auto canceled=syncCanceled;
     struct Synced{QString message;bool pending=false;};
-    background(this,[directory,config,dbPath,user,pullOnly,canceled]{auto message=CacheSync::run(directory,config,dbPath,user,pullOnly,canceled);Database db(dbPath,user);return Synced{message,db.revision()>db.syncedRevision()};},[this,generation](Synced result){syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("同步"));if(result.pending||generation!=dirtyGeneration){if(!firstDirtyAt)dirty();}else firstDirtyAt=0;toast(result.message.isEmpty()?QStringLiteral("同步完成"):result.message);refreshBook();updateHistory();if(!currentEntry.isEmpty()){auto db=database;auto entry=currentEntry;auto revision=requestId;background(this,[db,entry]{return db.find(entry.value("Word").toString(),entry.value("Pair").toString());},[this,revision](QJsonObject value){if(revision!=requestId)return;if(!value.isEmpty())showEntry(value);else{currentEntry={};selectedPart.clear();star->setEnabled(false);copy->setEnabled(false);browser->setHtml(EntryRenderer::message(QStringLiteral("已移除"),QStringLiteral("该词已从同步词库中移除。"),settings.data));}},[this](QString e){toast(e,true);});}},[this](QString error){syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("重试同步"));toast(QStringLiteral("同步失败：")+error+QStringLiteral("\n本地词库已保存，可点击重试。"),true);});
+    background(this,[directory,config,dbPath,user,pullOnly,canceled]{auto message=CacheSync::run(directory,config,dbPath,user,pullOnly,canceled);Database db(dbPath,user);return Synced{message,db.revision()>db.syncedRevision()};},[this,generation](Synced result){syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("同步"));if(result.pending||generation!=dirtyGeneration){if(!firstDirtyAt)dirty();}else firstDirtyAt=0;toast(result.message.isEmpty()?QStringLiteral("同步完成"):result.message);refreshBook();updateHistory();if(!currentEntry.isEmpty()){auto db=database;auto entry=currentEntry;auto revision=requestId;background(this,[db,entry]{return db.find(entry.value("Word").toString(),entry.value("Pair").toString());},[this,revision](QJsonObject value){if(revision!=requestId)return;if(!value.isEmpty())showEntry(value);else{currentEntry={};selectedPart.clear();star->setEnabled(false);copy->setEnabled(false);showMessage(QStringLiteral("已移除"),QStringLiteral("该词已从同步词库中移除。"));}},[this](QString e){toast(e,true);});}},[this](QString error){syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("重试同步"));toast(QStringLiteral("同步失败：")+error+QStringLiteral("\n本地词库已保存，可点击重试。"),true);});
 }
 void MainWindow::exportBook(){
     if(!initialized)return;QString path=QFileDialog::getSaveFileName(this,QStringLiteral("导出单词本"),QDir::homePath()+"/MyDict.csv",QStringLiteral("CSV 文件 (*.csv)"));if(path.isEmpty())return;auto db=database;QString search=filter->text().trimmed();bool only=favoritesOnly->isChecked();
