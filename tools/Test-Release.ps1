@@ -9,7 +9,7 @@ $out = if ([IO.Path]::IsPathRooted($OutputDirectory)) { $OutputDirectory } else 
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 $csc = Join-Path $installation 'MSBuild\Current\Bin\Roslyn\csc.exe'
 $refs = 'C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8'
-foreach ($test in @('SenseTests', 'CacheTests', 'ReleaseUiTests','DeepSeekTests','CacheSyncTests','SqliteTests','FontTests')) {
+foreach ($test in @('SenseTests', 'CacheTests', 'ReleaseUiTests','DeepSeekTests','CacheSyncTests','SqliteTests','FontTests','WordRemovalTests')) {
  $arguments = @('/nologo', '/debug:full','/optimize-', '/platform:x64', ('/out:' + (Join-Path $out ($test + '.exe'))), ('/r:' + (Join-Path $out 'MyDict.exe')), '/r:System.Web.Extensions.dll','/r:System.Net.Http.dll')
  if ($test -in @('ReleaseUiTests','DeepSeekTests','FontTests')) { foreach ($assembly in @('PresentationFramework','PresentationCore','WindowsBase','System.Xaml')) { $arguments += '/r:' + (Join-Path $refs ($assembly + '.dll')) } }
  $arguments += Join-Path $root ('tests\' + $test + '.cs')

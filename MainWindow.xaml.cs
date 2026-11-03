@@ -22,6 +22,10 @@ namespace MyDict
         private int storageGeneration,bookRevision,bookPage;
         private long bookMatches;
         private bool currentIsFavorite;
+        private readonly HashSet<string> removingWords=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private Func<string,bool> confirmDeepSeekRefresh;
+        private bool confirmingRefresh;
+        private readonly DispatcherTimer noticeTimer=new DispatcherTimer{Interval=TimeSpan.FromSeconds(3)};
         private readonly HashSet<Task> pendingWrites=new HashSet<Task>();
         private readonly DispatcherTimer bookFilterTimer=new DispatcherTimer{Interval=TimeSpan.FromMilliseconds(200)};
         private Entry current;
@@ -54,6 +58,8 @@ namespace MyDict
             ThemeStyles.EnsureLoaded();
             InitializeComponent();
             exchangeDatabase=(db,upload)=>CreateCacheSync().ExchangeDatabaseAsync(db,CacheIdentity.DeviceId(settings.CacheSync.DeviceId),upload);
+            confirmDeepSeekRefresh=word=>MessageBox.Show(this,"“"+word+"”已有 DeepSeek 释义，是否重新查询并更新？","重新查询 DeepSeek",MessageBoxButton.YesNo,MessageBoxImage.Question,MessageBoxResult.No)==MessageBoxResult.Yes;
+            noticeTimer.Tick+=(s,e)=>{noticeTimer.Stop();ActionNotice.IsOpen=false;};
             ThemeStyles.Changed+=ReloadTheme;
             try { settings = SettingsStore.Load(); } catch (Exception ex) { settingsValid = false; settings.username = "recovery-" + Guid.NewGuid().ToString("N").Substring(0,16); settings.CacheSync.Enabled = false; SetState("!", "设置读取失败，暂用默认值并暂停缓存保存：" + ex.Message); }
             ApplySettings();
@@ -72,7 +78,7 @@ namespace MyDict
             PreviewKeyDown += HistoryKeys;
             Loaded += async (s, e) => { Query.Focus(); await Dispatcher.Yield(DispatcherPriority.Background);storageTask=InitializeStorageAsync();await storageTask;if(databaseReady)await PullCacheAsync(); };
             StartSettingsWatcher();
-            Closed += (s, e) => { windowClosed = true;bookRevision++;storageGeneration++;bookFilterTimer.Stop(); cacheTimer.Stop(); debounce.Stop(); request?.Cancel(); settingsReload.Stop(); settingsWatcher?.Dispose();ThemeStyles.Changed-=ReloadTheme; };
+            Closed += (s, e) => { windowClosed = true;noticeTimer.Stop();ActionNotice.IsOpen=false;bookRevision++;storageGeneration++;bookFilterTimer.Stop(); cacheTimer.Stop(); debounce.Stop(); request?.Cancel(); settingsReload.Stop(); settingsWatcher?.Dispose();ThemeStyles.Changed-=ReloadTheme; };
         }
         private void SetState(string icon, string hint)
         {
@@ -80,7 +86,11 @@ namespace MyDict
             string data = icon == "✓" ? "M4,12 L9,17 20,6" : icon == "!" ? "M12,4 L12,13 M12,19 L12,19.1" : icon == "…" ? "M5,12 L5.1,12 M12,12 L12.1,12 M19,12 L19.1,12" : "";
             StateMark.Data = string.IsNullOrEmpty(data) ? null : System.Windows.Media.Geometry.Parse(data);
         }
-        private void SetSaved(bool saved) { SaveGlyph.Fill = saved ? ThemeStyles.BrushFor("#9370DB") : ThemeStyles.BrushFor("Transparent"); }
+        private void SetSaved(bool saved) { SaveGlyph.Fill = saved ? ThemeStyles.BrushFor("#9370DB") : ThemeStyles.BrushFor("Transparent");System.Windows.Automation.AutomationProperties.SetName(SaveButton,saved?"取消收藏单词":"收藏单词"); }
+        private void ShowNotice(string message)
+        {
+            if(windowClosed)return;ActionNotice.PlacementTarget=DeepSeekCheck.IsVisible?(UIElement)DeepSeekCheck:SyncButton;ActionNoticeText.Text=message;ActionNotice.IsOpen=true;noticeTimer.Stop();noticeTimer.Start();
+        }
         private void InvalidateQuery()
         {
             debounce.Stop(); revision++; request?.Cancel(); current = null;
@@ -124,6 +134,7 @@ namespace MyDict
             public List<BookSource> Sources {get;set;} = new List<BookSource>();
             public bool IsFavorite { get; set; }
             public string Star { get { return IsFavorite?"★":"☆"; } }
+            public bool CanRemove {get{return !IsFavorite;}}
         }
         private async void BookStar_Click(object sender,RoutedEventArgs e)
         {
@@ -137,20 +148,48 @@ namespace MyDict
             // Stop the row selection from navigating away before the star button receives its click.
             e.Handled=true;BookStar_Click(sender,e);
         }
+        private void BookRemove_Preview(object sender,MouseButtonEventArgs e){e.Handled=true;BookRemove_Click(sender,e);}
+        private async void BookRemove_Click(object sender,RoutedEventArgs e)
+        {
+            e.Handled=true;var row=(sender as FrameworkElement)?.DataContext as BookRow;if(row==null||!databaseReady)return;
+            if(row.IsFavorite){ShowNotice("请先取消收藏，再移除该词");return;}
+            string removalKey=row.Word.Trim().Normalize()+"|"+row.Entry.Pair;if(!removingWords.Add(removalKey))return;
+            bool matchesQuery=string.Equals(Query.Text.Trim(),row.Word,StringComparison.OrdinalIgnoreCase)&&Translator.DetectPair(Query.Text.Trim())==row.Entry.Pair;
+            var displayed=current;bool wasSaveEnabled=SaveButton.IsEnabled;
+            if(matchesQuery){debounce.Stop();revision++;request?.Cancel();SaveButton.IsEnabled=false;}
+            var db=database;var button=sender as Button;if(button!=null)button.SetCurrentValue(IsEnabledProperty,false);
+            try {
+                bool removed=false;await TrackWrite(Task.Run(()=>{removed=db.RemoveWord(row.Id);}));
+                if(db!=database||windowClosed)return;
+                if(!removed){ShowNotice("该词已收藏或已移除，请刷新后重试");RefreshList();return;}
+                if(string.Equals(Query.Text.Trim(),row.Word,StringComparison.OrdinalIgnoreCase)&&Translator.DetectPair(Query.Text.Trim())==row.Entry.Pair){InvalidateQuery();ResultView.Document=EntryDocument.Message("","该词已从单词本移除");}
+                MarkCacheDirty();RefreshList();await UpdateHistoryButtonsAsync();ShowNotice("已移除 “"+row.Word+"”");
+            }catch(Exception ex){SetState("!","移除失败："+ex.Message);ShowNotice("移除失败，请重试");}
+            finally{removingWords.Remove(removalKey);if(!windowClosed&&current!=null&&current==displayed&&matchesQuery)SaveButton.IsEnabled=wasSaveEnabled;if(button!=null&&!windowClosed){var binding=button.GetBindingExpression(IsEnabledProperty);if(binding!=null)binding.UpdateTarget();else button.ClearValue(IsEnabledProperty);}}
+        }
         private void FavoriteMode_Changed(object sender,RoutedEventArgs e) {bookPage=0;RefreshList();}
         private Task SearchAsync(bool forceRefresh=false) { return SearchCoreAsync(forceRefresh,false); }
         private async Task SearchCoreAsync(bool forceRefresh,bool manual)
         {
             string word = Query.Text.Trim();
-            if (word.Length == 0 || composing) return;
+            if (word.Length == 0 || composing || confirmingRefresh) return;
             long beforeRead=revision;await storageTask;if(!databaseReady||windowClosed||beforeRead!=revision)return;
             string pair = Translator.DetectPair(word);var db=database;
+            if(removingWords.Contains(word.Normalize()+"|"+pair))return;
             WordSelection cached=null;
             try {if(!forceRefresh)cached=await Task.Run(()=>db.Find(word,pair));}catch(Exception ex){SetState("!","读取缓存失败："+ex.Message);return;}
             if(beforeRead!=revision||db!=database||windowClosed)return;
             if(cached!=null){ShowSelection(cached,"本地缓存（Ctrl+R 可联网更新）");await RememberAsync(cached.Entry,false);return;}
             if(settings.DeepSeek.Enabled&&!manual) { SetState("","点击查询按钮使用 DeepSeek"); return; }
-            long version = revision;
+            if(settings.DeepSeek.Enabled&&manual&&forceRefresh)
+            {
+                bool existing;
+                try {existing=await Task.Run(()=>db.HasDeepSeek(word,pair));}catch(Exception ex){SetState("!","读取 DeepSeek 缓存失败："+ex.Message);return;}
+                if(beforeRead!=revision||db!=database||windowClosed)return;
+                if(existing){bool confirmed;confirmingRefresh=true;try{confirmed=confirmDeepSeekRefresh(word);}finally{confirmingRefresh=false;}if(!confirmed)return;}
+                if(beforeRead!=revision||db!=database||windowClosed)return;
+            }
+            InvalidateQuery();long version = revision;
             var active = new CancellationTokenSource(); request = active;
             CancellationToken token = active.Token;
             var lookupSettings=new AppSettings {Provider=settings.Provider,LibreUrl=settings.LibreUrl,ApiKey=settings.ApiKey};
@@ -220,9 +259,14 @@ namespace MyDict
         }
         private async void Save_Click(object sender,RoutedEventArgs e)
         {
-            var entry=current;var db=database;if(entry==null||!databaseReady)return;
-            try {await TrackWrite(Task.Run(()=>db.Save(entry,true)));if(db!=database||windowClosed)return;MarkCacheDirty();RefreshList();if(current==entry){currentIsFavorite=true;SetSaved(true);SetState("✓","已收藏");}}
-            catch(Exception ex){SetState("!","收藏保存失败："+ex.Message);}
+            var entry=current;var db=database;if(entry==null||!databaseReady||!SaveButton.IsEnabled)return;SaveButton.IsEnabled=false;
+            try {
+                bool favorite=false;
+                await TrackWrite(Task.Run(()=>{favorite=!db.IsFavorite(entry.Word,entry.Pair??Translator.DetectPair(entry.Word));db.Save(entry,favorite);}));
+                if(db!=database||windowClosed)return;MarkCacheDirty();RefreshList();
+                if(current==entry){currentIsFavorite=favorite;SetSaved(favorite);SetState("✓",favorite?"已收藏":"已取消收藏");}
+            }catch(Exception ex){SetState("!","收藏保存失败："+ex.Message);}
+            finally{if(!windowClosed&&current==entry)SaveButton.IsEnabled=storageAvailable;}
         }
         private async void Favorite_Selected(object sender,SelectionChangedEventArgs e)
         {
@@ -307,15 +351,15 @@ namespace MyDict
         }
         private async void Search_Click(object sender,RoutedEventArgs e)
         {
-            InvalidateQuery();await SearchCoreAsync(true,true);
+            await SearchCoreAsync(true,true);
         }
         private void DeepSeek_Changed(object sender,RoutedEventArgs e)
         {
             if(suppressDeepSeekToggle || ResultView==null)return;
-            bool enabled=DeepSeekCheck.IsChecked==true;InvalidateQuery();settings.DeepSeek.Enabled=enabled;
-            try {SettingsStore.SetDeepSeekEnabled(enabled);}catch(Exception ex){SetState("!","DeepSeek 开关保存失败："+ex.Message);return;}
+            bool enabled=DeepSeekCheck.IsChecked==true,previous=settings.DeepSeek.Enabled;InvalidateQuery();settings.DeepSeek.Enabled=enabled;
+            try {SettingsStore.SetDeepSeekEnabled(enabled);}catch(Exception ex){settings.DeepSeek.Enabled=previous;suppressDeepSeekToggle=true;DeepSeekCheck.IsChecked=previous;suppressDeepSeekToggle=false;SetState("!","DeepSeek 开关保存失败："+ex.Message);return;}
             if(!string.IsNullOrWhiteSpace(Query.Text))debounce.Start();
-            SetState("",enabled?"DeepSeek 已启用；点击查询按钮发送请求":"普通词典自动查询");
+            string notice=enabled?"已开启 DeepSeek查词":"已关闭 DeepSeek查词";SetState("✓",notice);ShowNotice(notice);
         }
         private async void WordLookup(object sender,RoutedEventArgs e)
         {
@@ -398,7 +442,7 @@ namespace MyDict
                 if(save){await TrackWrite(Task.Run(()=>db.Save(entry,null,true)));if(db!=database||windowClosed)return false;MarkCacheDirty();}
                 else await TrackWrite(Task.Run(()=>db.Visit(entry)));
                 if(db!=database||windowClosed)return false;
-                if(current==entry){currentIsFavorite=await Task.Run(()=>db.IsFavorite(entry.Word,entry.Pair));SetSaved(currentIsFavorite);}
+                if(current==entry){currentIsFavorite=await Task.Run(()=>db.IsFavorite(entry.Word,entry.Pair??Translator.DetectPair(entry.Word)));SetSaved(currentIsFavorite);}
                 await UpdateHistoryButtonsAsync();if(save)RefreshList();return true;
             }catch(Exception ex){if(!windowClosed)SetState("!","数据库保存失败："+ex.Message);return false;}
         }

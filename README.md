@@ -1,16 +1,16 @@
 # 拾词 MyDict
 
-C# / WPF 中英词典，使用 VS2022 和 .NET Framework 4.8 编译。当前固定版本为 **1.5.0**（Git 标签 `v1.5.0`），程序输出 `bin/1.5/MyDict.exe`，明确使用 x64；需要 Windows 10/11 64 位（使用系统 SQLite）。1.3、1.4 固定版本保持独立。
+C# / WPF 中英词典，使用 VS2022 和 .NET Framework 4.8 编译。当前固定版本为 **1.5.1**（Git 标签 `v1.5.1`），程序输出 `bin/1.5/MyDict.exe`，明确使用 x64；需要 Windows 10/11 64 位（使用系统 SQLite）。1.3、1.4、1.5.0 固定版本保持独立。
 
-源码：[Gitee hippo-yf/MyDict](https://gitee.com/hippo-yf/MyDict)。本地便携包为 `release/MyDict-v1.5.0-win-x64.zip`，校验值位于 `release/SHA256SUMS.txt`。
+源码：[Gitee hippo-yf/MyDict](https://gitee.com/hippo-yf/MyDict)。本地便携包为 `release/MyDict-v1.5.1-win-x64.zip`，校验值位于 `release/SHA256SUMS.txt`。
 
 ## 查词与单词本
 
-- 输入停顿后查询普通在线来源；DeepSeek 使用鲸鱼开关启用，点击查询、输入框回车或点击释义中的其他英文单词触发查询。
+- 输入停顿后查询普通在线来源；DeepSeek 使用鲸鱼开关启用，点击查询、输入框回车或点击释义中的其他英文单词触发查询。开关显示短提示；已有 DeepSeek 释义时，再次联网查询前需要确认。
 - 查询按钮重新获取结果；历史箭头或 Alt+左右键切换查词记录。
 - 音标、词形、逐义中英文释义、双语例句、语法着色和搭配；摘要优先使用已有 DeepSeek 结果。
 - 单词本摘要右侧显示来源图标：DeepSeek 独立图标，普通词典和翻译网站合为一个图标。
-- 单词本每页读取 50 条摘要，可筛选、只看收藏、翻页和切换收藏；点击词条才读取完整释义。
+- 单词本每页读取 50 条摘要，可筛选、只看收藏、翻页和切换收藏；点击词条才读取完整释义。查词页星标也可取消收藏；单词本行末 X 只允许移除未收藏词。
 - Ctrl+加号/减号调整内容及单词本字号，Ctrl+[ / ] 调整行距。
 
 ## SQLite 存储与加载

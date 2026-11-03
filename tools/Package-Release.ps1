@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
-$version = '1.5.0'
+$version = '1.5.1'
 $folder = Join-Path $root ('release\MyDict-v' + $version + '-win-x64')
 New-Item -ItemType Directory -Path $folder -Force | Out-Null
 foreach ($name in @('MyDict.exe','MyDict.exe.config')) {
@@ -11,7 +11,7 @@ $fonts=Join-Path $folder 'fonts'
 New-Item -ItemType Directory -Path $fonts -Force | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $root 'fonts') -File | Copy-Item -Destination $fonts -Force
 @'
-MyDict v1.5.0
+MyDict v1.5.1
 Authors: Yance Feng & Codex
 
 Extract to a writable folder and run MyDict.exe. Requires 64-bit Windows 10/11 and .NET Framework 4.8 (Windows SQLite runtime).
@@ -25,6 +25,11 @@ See settings.example.json for configuration examples, and THIRD-PARTY-NOTICES.md
 $zip = Join-Path $root ('release\MyDict-v' + $version + '-win-x64.zip')
 Compress-Archive -Path (Join-Path $folder '*') -DestinationPath $zip -Force
 $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-($hash + '  ' + [IO.Path]::GetFileName($zip)) | Set-Content (Join-Path $root 'release\SHA256SUMS.txt') -Encoding ASCII
+$checksumPath=Join-Path $root 'release\SHA256SUMS.txt'
+$archiveName=[IO.Path]::GetFileName($zip)
+$existing=if(Test-Path -LiteralPath $checksumPath){@(Get-Content -LiteralPath $checksumPath | Where-Object { $_ -and !$_.EndsWith('  '+$archiveName) })}else{@()}
+$checksum=$hash+'  '+$archiveName
+@($existing)+@($checksum) | Set-Content -LiteralPath $checksumPath -Encoding ASCII
+$checksum | Set-Content -LiteralPath ($zip+'.sha256') -Encoding ASCII
 Write-Output $zip
 

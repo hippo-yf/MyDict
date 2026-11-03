@@ -44,3 +44,5 @@ cache-sync/
 
 /fonts/local/
 !/tests/FontTests.cs
+
+!/tests/WordRemovalTests.cs
