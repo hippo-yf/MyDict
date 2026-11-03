@@ -12,6 +12,9 @@ $refs = 'C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFra
 foreach ($test in @('SenseTests', 'CacheTests', 'ReleaseUiTests','DeepSeekTests','CacheSyncTests','SqliteTests','SharedCacheTests','FontTests','WordRemovalTests')) {
  $arguments = @('/nologo', '/debug:full','/optimize-', '/platform:x64', ('/out:' + (Join-Path $out ($test + '.exe'))), ('/r:' + (Join-Path $out 'MyDict.exe')), '/r:System.Web.Extensions.dll','/r:System.Net.Http.dll')
  if ($test -in @('ReleaseUiTests','DeepSeekTests','FontTests')) { foreach ($assembly in @('PresentationFramework','PresentationCore','WindowsBase','System.Xaml')) { $arguments += '/r:' + (Join-Path $refs ($assembly + '.dll')) } }
+ # Resource-only UI initialization must work from any requested output folder.
+ # Embed the exact build input instead of assuming ../../App.xaml exists.
+ if ($test -in @('ReleaseUiTests','DeepSeekTests')) { $arguments += '/resource:' + (Join-Path $root 'App.xaml') + ',MyDict.TestApp.xaml' }
  $arguments += Join-Path $root ('tests\' + $test + '.cs')
  if ($test -eq 'SharedCacheTests') { $arguments += @('/r:System.Runtime.Serialization.dll','/r:System.Xml.dll',(Join-Path $root 'Sqlite.cs')) }
  & $csc @arguments

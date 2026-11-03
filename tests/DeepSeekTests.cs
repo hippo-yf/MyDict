@@ -39,7 +39,7 @@ class DeepSeekTests
  static Entry Normal(string word){return new Entry{Word=word,Pair="en|zh-CN",Translation="普通词典",TranslationProvider="MyMemory",Record=new DictionaryRecord{Word=word}};}
  static void LoadResources(App app)
  {
-  var xml=new System.Xml.XmlDocument();xml.Load(Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","..","App.xaml")));
+  var xml=new System.Xml.XmlDocument();using(var stream=typeof(DeepSeekTests).Assembly.GetManifestResourceStream("MyDict.TestApp.xaml")){if(stream==null)throw new InvalidOperationException("Test App.xaml resource was not embedded by Test-Release.ps1.");xml.Load(stream);}
   string resources=xml.SelectSingleNode("//*[local-name()='Application.Resources']").InnerXml;
   app.Resources=(ResourceDictionary)System.Windows.Markup.XamlReader.Parse("<ResourceDictionary xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>"+resources+"</ResourceDictionary>");
  }
