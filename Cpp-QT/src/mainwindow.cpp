@@ -381,7 +381,7 @@ void MainWindow::lookup(bool force,bool manual,bool link) {
         if(revision!=requestId||pendingClose)return;
         if(ai&&manual&&force&&cached.existingAi){
             QMessageBox box(QMessageBox::Question,QStringLiteral("再次查询 DeepSeek"),QStringLiteral("“%1”已有 DeepSeek 释义。再次查询将调用 API 并更新内容，是否继续？").arg(text),QMessageBox::Yes|QMessageBox::No,this);box.setDefaultButton(QMessageBox::No);box.button(QMessageBox::Yes)->setText(QStringLiteral("再次查询"));box.button(QMessageBox::No)->setText(QStringLiteral("取消"));
-            if(box.exec()!=QMessageBox::Yes){if(!cached.entry.isEmpty())showEntry(cached.entry);return;}
+            if(box.exec()!=QMessageBox::Yes)return;
             if(revision!=requestId)return;
         }
         const bool cachedAllowed=!force||(ai&&!manual);

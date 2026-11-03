@@ -7,7 +7,7 @@
 | 平台 | 架构 | 本次验证 |
 | --- | --- | --- |
 | Windows 10/11 | x64 | VS2022 + Conda Qt6 本机编译、离线测试、脱离 Conda 启动验证 |
-| Linux | x64 | Debian 12 / WSL + Conda Qt6 原生编译、离线测试；便携包验证中 |
+| Linux | x64 | Debian 12 / WSL + Conda Qt6 原生编译、离线测试、脱离 Conda 启动验证 |
 | macOS | Apple Silicon arm64、Intel x64 | GitHub Actions 原生编译、测试、打包；以 Actions 结果为准 |
 
 三平台自动构建入口：[GitHub Actions](https://github.com/hippo-yf/MyDict/actions/workflows/qt-build.yml)。每个成功任务提供程序压缩包、SHA256 和测试结果。不同平台的二进制由对应平台编译，macOS 的两个架构分别打包。

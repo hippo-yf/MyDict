@@ -29,6 +29,10 @@ CASCADIA-OFL.txt and NERD-FONTS-LICENSE.txt licenses. fonts/local/ is private an
 never installed or packaged by the Qt CMake manifest. Font rendering falls back to
 system fonts when configured fonts are absent.
 
+Noto Sans SC is additionally included for Chinese glyph coverage on Linux and
+other systems without a Chinese font. Its SIL Open Font License is supplied as
+fonts/NOTO-SANS-SC-OFL.txt. Source: https://github.com/google/fonts/tree/main/ofl/notosanssc.
+
 Dictionary content retains its source licensing: Free Dictionary API records
 include source/license references, and Wiktionary text is CC BY-SA. DeepSeek,
 MyMemory and LibreTranslate are user-configured remote services; application

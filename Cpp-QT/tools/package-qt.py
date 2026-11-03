@@ -143,14 +143,22 @@ def macos_runtime(stage, prefix):
     arguments = [deploy, app, '-always-overwrite']
     if cli.exists():
         arguments.append(f'-executable={cli}')
-    run(*arguments)
+    if deploy.exists():
+        try:
+            run(*arguments)
+        except subprocess.CalledProcessError:
+            # Conda's relocatable Qt metadata can defeat macdeployqt's prefix
+            # queries. The explicit plugin list and Mach-O closure below cover
+            # the same Widgets dependencies without relying on those queries.
+            print('Conda macdeployqt query failed; using Mach-O dependency closure and explicit Qt plugins.')
 
     plugin_root = next((p for p in (prefix/'lib/qt6/plugins', prefix/'plugins',
                                    prefix/'lib/qt/plugins') if p.is_dir()), None)
     origins = {}
     if plugin_root:
-        for category, names in (('sqldrivers', ('libqsqlite.dylib',)),
-                                ('tls', ('libqopensslbackend.dylib', 'libqsecuretransportbackend.dylib')),
+        for category, names in (('platforms', ('libqcocoa.dylib', 'libqoffscreen.dylib', 'libqminimal.dylib')),
+                                ('sqldrivers', ('libqsqlite.dylib',)),
+                                ('tls', ('libqopensslbackend.dylib', 'libqsecuretransportbackend.dylib', 'libqcertonlybackend.dylib')),
                                 ('imageformats', ('libqsvg.dylib',)),
                                 ('iconengines', ('libqsvgicon.dylib',))):
             for name in names:

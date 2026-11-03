@@ -54,7 +54,9 @@ jobs:
       - name: Test offline
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir Cpp-QT/build/ci -C Release --output-on-failure --output-junit test-results.xml
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then export QT_PLUGIN_PATH="$CONDA_PREFIX/Library/lib/qt6/plugins"; fi
+          ctest --test-dir Cpp-QT/build/ci -C Release --output-on-failure --output-junit test-results.xml
       - name: Package native application
         run: python Cpp-QT/tools/package-qt.py --build Cpp-QT/build/ci --prefix "$CONDA_PREFIX" --output Cpp-QT/dist
       - name: Smoke test packaged application
