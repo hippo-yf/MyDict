@@ -1,0 +1,81 @@
+name: MyDict Qt - Windows macOS Linux
+on:
+  workflow_dispatch:
+  push:
+    branches: ["codex/qt-cross-platform", "develop/1.5", "main"]
+    paths: ["Cpp-QT/src/**", "Cpp-QT/tests/*_test.cpp", "Cpp-QT/CMakeLists.txt", "Cpp-QT/resources.qrc", "Cpp-QT/environment.yml", "Cpp-QT/tools/package-qt.py", "Cpp-QT/packaging/**", "Cpp-QT/*.json", "Cpp-QT/QT-NOTICES.md", ".github/workflows/qt-build.yml"]
+  pull_request:
+    paths: ["Cpp-QT/**", ".github/workflows/qt-build.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: qt-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, name: windows-x64 }
+          - { os: ubuntu-22.04, name: linux-x64 }
+          - { os: macos-15, name: macos-arm64 }
+          - { os: macos-15-intel, name: macos-x64 }
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          environment-file: Cpp-QT/environment.yml
+          activate-environment: mydict-qt
+          auto-activate-base: false
+          use-mamba: true
+      - name: Linux compiler and runtime
+        if: runner.os == 'Linux'
+        run: |
+          conda install -y --override-channels -c conda-forge cxx-compiler patchelf
+          sudo apt-get update -qq
+          sudo apt-get install -y libegl1 libopengl0 libdbus-1-3 libxkbcommon0
+      - name: Configure
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            cmake -S Cpp-QT -B Cpp-QT/build/ci -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="$CONDA_PREFIX/Library" -DBUILD_TESTING=ON
+          else
+            cmake -S Cpp-QT -B Cpp-QT/build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" -DBUILD_TESTING=ON
+          fi
+      - name: Compile
+        run: cmake --build Cpp-QT/build/ci --config Release --parallel 3
+      - name: Test offline
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir Cpp-QT/build/ci -C Release --output-on-failure --output-junit test-results.xml
+      - name: Package native application
+        run: python Cpp-QT/tools/package-qt.py --build Cpp-QT/build/ci --prefix "$CONDA_PREFIX" --output Cpp-QT/dist
+      - name: Smoke test packaged application
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python Cpp-QT/tools/smoke-package.py Cpp-QT/dist
+      - name: Upload program and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyDictQt-${{ matrix.name }}
+          path: |
+            Cpp-QT/dist/*.zip
+            Cpp-QT/dist/*.tar.gz
+            Cpp-QT/dist/*.sha256
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-${{ matrix.name }}
+          path: Cpp-QT/build/ci/test-results.xml
+          if-no-files-found: ignore

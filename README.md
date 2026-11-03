@@ -4,6 +4,12 @@ C# / WPF 中英词典，使用 VS2022 和 .NET Framework 4.8 编译。当前固�
 
 源码：[Gitee hippo-yf/MyDict](https://gitee.com/hippo-yf/MyDict)。本地便携包为 `release/MyDict-v1.5.1-win-x64.zip`，校验值位于 `release/SHA256SUMS.txt`。
 
+## 开发交接
+
+完整架构、数据合同、查询流程、迁移同步、测试发布及排障说明见 [技术交接 Specification](docs/HANDOVER_SPECIFICATION.md)。
+
+C++ / Qt 跨平台版本见 [Cpp-QT](Cpp-QT/README.md)，使用 Conda、CMake 和平台原生编译器，另有 Windows、macOS、Linux 自动构建。
+
 ## 界面预览
 
 | 查词 | 单词本 |

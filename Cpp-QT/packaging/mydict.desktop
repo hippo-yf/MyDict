@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=拾词 MyDict
+Comment=Chinese-English dictionary with optional DeepSeek
+Exec=MyDictQt
+Icon=mydict
+Categories=Education;Languages;
+Terminal=false

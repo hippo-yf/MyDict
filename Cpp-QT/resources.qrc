@@ -1,0 +1,7 @@
+<RCC><qresource prefix="/">
+ <file alias="styles.defaults.json">styles.defaults.json</file>
+ <file alias="settings.example.json">settings.qt.example.json</file>
+ <file alias="app-icon.png">assets/app-icon.png</file>
+ <file alias="assets/app-icon.png">assets/app-icon.png</file>
+ <file alias="deepseek.svg">deepseek.svg</file>
+</qresource></RCC>

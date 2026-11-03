@@ -1,0 +1,14 @@
+name: mydict-qt
+channels:
+  - conda-forge
+dependencies:
+  - qt6-main >=6.8,<7
+  - cmake >=3.22
+  - ninja
+  - python =3.12
+  - git
+  - openssl
+  - sqlite
+  - conda-pack
+# Windows: VS2022 C++ desktop tools; macOS: Xcode command-line tools;
+# Linux: install a system C++17 compiler or conda-forge cxx-compiler.
