@@ -23,8 +23,10 @@ namespace MyDict {
 namespace {
 constexpr qint64 EpochTicks = Q_INT64_C(621355968000000000);
 constexpr qint64 TicksPerSecond = Q_INT64_C(10000000);
-const QString PayloadFormat = QStringLiteral("qt-json-v1");
-const QByteArray PayloadPrefix = QByteArrayLiteral("MYDICT-QT-JSON1\n");
+const QString PayloadFormat = QStringLiteral("mydict-json-v1");
+const QString LegacyPayloadFormat = QStringLiteral("qt-json-v1");
+const QByteArray PayloadPrefix = QByteArrayLiteral("MYDICT-JSON1\n");
+const QByteArray LegacyPayloadPrefix = QByteArrayLiteral("MYDICT-QT-JSON1\n");
 
 [[noreturn]] void fail(const QString &message) {
     throw std::runtime_error(message.toUtf8().constData());
@@ -169,15 +171,21 @@ QVariant scalar(QSqlDatabase &db, const QString &sql, const QVariantList &parame
 QString meta(QSqlDatabase &db, const QString &key) {
     return scalar(db, QStringLiteral("SELECT value FROM metadata WHERE key=?"), {key}).toString();
 }
+bool hasTable(QSqlDatabase &db, const QString &name) {
+    return scalar(db, QStringLiteral("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)"), {name}).toBool();
+}
 void setMeta(QSqlDatabase &db, const QString &key, const QString &value) {
     query(db, QStringLiteral("INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)"), {key, value});
 }
 void dirty(QSqlDatabase &db) {
     query(db, QStringLiteral("UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='revision'"));
 }
-void verify(QSqlDatabase &db, const QString &user) {
-    if (meta(db, QStringLiteral("payload_format")) != PayloadFormat)
-        fail(QStringLiteral("此文件不是 Qt JSON 词库。旧 C# 二进制词库须先运行导出迁移工具，已保护原文件。"));
+void verify(QSqlDatabase &db, const QString &user, bool allowLegacy = false) {
+    const auto format = meta(db, QStringLiteral("payload_format"));
+    if (format != PayloadFormat && !(allowLegacy && format == LegacyPayloadFormat))
+        fail(format == LegacyPayloadFormat
+            ? QStringLiteral("旧 Qt 词库仅允许只读导入，请使用新的 words-shared.sqlite，原文件已保留。")
+            : QStringLiteral("此文件不是公共 JSON 词库。旧 C# 二进制词库需由新版 C# 客户端同步转换，原文件已保留。"));
     if (meta(db, QStringLiteral("schema")) != QStringLiteral("1")) fail(QStringLiteral("不支持此 SQLite schema 版本。"));
     if (meta(db, QStringLiteral("username")) != user) fail(QStringLiteral("数据库 username 不匹配，已保护原文件。"));
 }
@@ -193,10 +201,12 @@ QByteArray encode(const QJsonObject &entry) {
     return PayloadPrefix + QJsonDocument(entry).toJson(QJsonDocument::Compact);
 }
 QJsonObject decode(const QByteArray &bytes) {
-    if (!bytes.startsWith(PayloadPrefix)) fail(QStringLiteral("词条 payload 格式不受支持。"));
+    int prefixLength = bytes.startsWith(PayloadPrefix) ? PayloadPrefix.size()
+        : bytes.startsWith(LegacyPayloadPrefix) ? LegacyPayloadPrefix.size() : 0;
+    if (!prefixLength) fail(QStringLiteral("词条 payload 格式不受支持。"));
     if (bytes.size() > 32 * 1024 * 1024) fail(QStringLiteral("词条内容超过 32 MiB 安全限制。"));
     QJsonParseError error;
-    auto doc = QJsonDocument::fromJson(bytes.mid(PayloadPrefix.size()), &error);
+    auto doc = QJsonDocument::fromJson(bytes.mid(prefixLength), &error);
     if (error.error != QJsonParseError::NoError || !doc.isObject()) fail(QStringLiteral("SQLite 词条 JSON 损坏。"));
     return doc.object();
 }
@@ -391,7 +401,7 @@ bool Settings::reload() {
     load(); return true;
 }
 QString Settings::username() const { return data.value(QStringLiteral("username")).toString(); }
-QString Settings::databasePath() const { return QDir(directory).filePath(QStringLiteral("profiles/") + username() + QStringLiteral("/words-qt.sqlite")); }
+QString Settings::databasePath() const { return QDir(directory).filePath(QStringLiteral("profiles/") + username() + QStringLiteral("/words-shared.sqlite")); }
 
 Database::Database(QString path, QString username) : filePath(QFileInfo(path).absoluteFilePath()), user(username) {}
 QString Database::path() const { return filePath; }
@@ -402,6 +412,7 @@ void Database::initialize() {
         verify(check.db, user); // Verify BEFORE any pragma/schema writes on an existing file.
     }
     if (!QDir().mkpath(QFileInfo(filePath).absolutePath())) fail(QStringLiteral("无法创建数据库目录。"));
+    {
     Connection c(filePath);
     query(c.db, QStringLiteral("PRAGMA journal_mode=WAL"));
     query(c.db, QStringLiteral("PRAGMA synchronous=NORMAL"));
@@ -424,24 +435,76 @@ void Database::initialize() {
     qint64 highest = scalar(c.db, QStringLiteral("SELECT COALESCE(MAX(id),0) FROM words")).toLongLong();
     if (meta(c.db, QStringLiteral("word_sequence")).toLongLong() < highest) setMeta(c.db, QStringLiteral("word_sequence"), QString::number(highest));
     tx.commit();
+    }
+    migrateLocalQt();
+}
+bool Database::isJsonSnapshot(QString sqlitePath) {
+    if (!QFileInfo(sqlitePath).isFile() || QFileInfo(sqlitePath).size() == 0) return false;
+    Connection snapshot(sqlitePath, true);
+    if (!hasTable(snapshot.db, QStringLiteral("metadata"))) return false;
+    const auto format = meta(snapshot.db, QStringLiteral("payload_format"));
+    return (format == PayloadFormat || format == LegacyPayloadFormat)
+        && meta(snapshot.db, QStringLiteral("schema")) == QStringLiteral("1");
+}
+void Database::migrateLocalQt() {
+    if (QFileInfo(filePath).fileName() != QStringLiteral("words-shared.sqlite")) return;
+    const auto legacy = QFileInfo(filePath).dir().filePath(QStringLiteral("words-qt.sqlite"));
+    if (!QFileInfo::exists(legacy) || QFileInfo(legacy).canonicalFilePath() == QFileInfo(filePath).canonicalFilePath()
+        || !isJsonSnapshot(legacy)) return;
+    // mergeFrom never initializes either database, so this cannot recurse.
+    // The source fingerprint makes unchanged old files a cheap, idempotent read.
+    mergeFrom(legacy);
+    const auto migrationKey = QStringLiteral("migration:local-qt-history:") + QFileInfo(legacy).absoluteFilePath();
+    { Connection local(filePath, true); verify(local.db, user); if (!meta(local.db, migrationKey).isEmpty()) return; }
+    Connection remote(legacy, true); verify(remote.db, user, true); query(remote.db, QStringLiteral("BEGIN"));
+    Connection local(filePath); verify(local.db, user); Transaction tx(local.db);
+    if (meta(local.db, migrationKey).isEmpty()) {
+        // History belongs to this device, unlike remote synchronization. Copy it
+        // only for the local upgrade and never replace an existing new history.
+        if (hasTable(remote.db, QStringLiteral("history")) && scalar(local.db, QStringLiteral("SELECT COUNT(*) FROM history")).toLongLong() == 0) {
+            auto cursorText = meta(remote.db, QStringLiteral("cursor"));
+            qint64 oldCursor = cursorText.isEmpty() ? -1 : cursorText.toLongLong(), position = 0, cursor = -1;
+            auto rows = query(remote.db, QStringLiteral("SELECT position,source_key FROM history ORDER BY position"));
+            while (rows.next()) {
+                auto key = rows.value(1).toString();
+                if (!scalar(local.db, QStringLiteral("SELECT EXISTS(SELECT 1 FROM sources WHERE source_key=?)"), {key}).toBool()) continue;
+                query(local.db, QStringLiteral("INSERT INTO history(position,source_key) VALUES(?,?)"), {position, key});
+                if (rows.value(0).toLongLong() <= oldCursor) cursor = position;
+                ++position;
+            }
+            setMeta(local.db, QStringLiteral("cursor"), QString::number(cursor));
+        }
+        bool changed = false;
+        if (hasTable(remote.db, QStringLiteral("import_errors"))) {
+            auto rows = query(remote.db, QStringLiteral("SELECT word,error,at FROM import_errors"));
+            while (rows.next()) {
+                QString word = nonNull(rows.value(0).toString()), error = nonNull(rows.value(1).toString()), at = nonNull(rows.value(2).toString());
+                auto inserted = query(local.db, QStringLiteral("INSERT INTO import_errors(word,error,at) SELECT ?,?,? WHERE NOT EXISTS(SELECT 1 FROM import_errors WHERE word=? AND error=? AND at=?)"), {word,error,at,word,error,at});
+                changed |= inserted.numRowsAffected() > 0;
+            }
+        }
+        if (changed) dirty(local.db);
+        setMeta(local.db, migrationKey, QStringLiteral("1"));
+    }
+    tx.commit();
 }
 QJsonObject Database::find(QString word, QString pair) const {
-    Connection c(filePath, true); verify(c.db, user);
+    Connection c(filePath, true); verify(c.db, user, true);
     return selectEntry(c.db, QStringLiteral("w.normalized=? AND w.pair=?"), {normalizeWord(word), pair});
 }
 QJsonObject Database::findDeepSeek(QString word, QString pair) const {
-    Connection c(filePath, true); verify(c.db, user);
+    Connection c(filePath, true); verify(c.db, user, true);
     return selectEntry(c.db, QStringLiteral("w.normalized=? AND w.pair=? AND s.is_ai=1"), {normalizeWord(word), pair});
 }
 QJsonObject Database::get(qint64 id) const {
-    Connection c(filePath, true); verify(c.db, user); return selectEntry(c.db, QStringLiteral("w.id=?"), {id});
+    Connection c(filePath, true); verify(c.db, user, true); return selectEntry(c.db, QStringLiteral("w.id=?"), {id});
 }
 bool Database::hasDeepSeek(QString word, QString pair) const {
-    Connection c(filePath, true); verify(c.db, user);
+    Connection c(filePath, true); verify(c.db, user, true);
     return scalar(c.db, QStringLiteral("SELECT EXISTS(SELECT 1 FROM words w JOIN sources s ON s.word_id=w.id WHERE w.normalized=? AND w.pair=? AND s.is_ai=1)"), {normalizeWord(word), pair}).toBool();
 }
 bool Database::isFavorite(QString word, QString pair) const {
-    Connection c(filePath, true); verify(c.db, user);
+    Connection c(filePath, true); verify(c.db, user, true);
     return scalar(c.db, QStringLiteral("SELECT favorite FROM words WHERE normalized=? AND pair=?"), {normalizeWord(word), pair}).toBool();
 }
 void Database::store(QJsonObject entry, bool addHistory) {
@@ -496,7 +559,7 @@ bool Database::remove(qint64 id) {
 }
 BookPage Database::page(QString filter, bool favoritesOnly, int offset, int limit) const {
     limit = std::max(1, std::min(100, limit)); offset = std::max(0, offset);
-    Connection c(filePath, true); verify(c.db, user);
+    Connection c(filePath, true); verify(c.db, user, true);
     auto parameters = filterValues(filter, favoritesOnly); BookPage result;
     result.total = scalar(c.db, QStringLiteral("SELECT COUNT(*) FROM words w") + likeWhere(), parameters).toInt();
     parameters << limit << offset;
@@ -518,13 +581,13 @@ QJsonObject Database::navigate(int direction) {
     QJsonObject entry = id > 0 ? selectEntry(c.db, QStringLiteral("w.id=?"), {id}) : QJsonObject(); tx.commit(); return entry;
 }
 bool Database::canNavigate(int direction) const {
-    Connection c(filePath, true); verify(c.db, user);
+    Connection c(filePath, true); verify(c.db, user, true);
     qint64 cursor = meta(c.db, QStringLiteral("cursor")).toLongLong();
     qint64 last = scalar(c.db, QStringLiteral("SELECT COALESCE(MAX(position),-1) FROM history")).toLongLong();
     return direction < 0 ? cursor > 0 : direction > 0 ? cursor < last : cursor >= 0 && cursor <= last;
 }
 void Database::exportCsv(QString path, QString filter, bool favoritesOnly) const {
-    Connection c(filePath, true); verify(c.db, user);
+    Connection c(filePath, true); verify(c.db, user, true);
     QSaveFile output(path);
     if (!output.open(QIODevice::WriteOnly)) fail(QStringLiteral("无法创建 CSV 文件。"));
     auto write = [&](const QByteArray &bytes) { if (output.write(bytes) != bytes.size()) fail(QStringLiteral("写入 CSV 失败。")); };
@@ -603,8 +666,9 @@ void Database::importEntries(QString jsonPath) {
 }
 void Database::mergeFrom(QString sqlitePath) {
     QString sourcePath = QFileInfo(sqlitePath).absoluteFilePath();
-    if (sourcePath == filePath) return;
-    Connection remote(sourcePath, true); verify(remote.db, user);
+    if (sourcePath == filePath || (!QFileInfo(sourcePath).canonicalFilePath().isEmpty()
+        && QFileInfo(sourcePath).canonicalFilePath() == QFileInfo(filePath).canonicalFilePath())) return;
+    Connection remote(sourcePath, true); verify(remote.db, user, true);
     query(remote.db, QStringLiteral("BEGIN")); // Pin one coherent snapshot through the paged read.
     QString fingerprint = QString::number(QFileInfo(sourcePath).size()) + QLatin1Char(':') + QString::number(QFileInfo(sourcePath).lastModified().toMSecsSinceEpoch()) + QLatin1Char(':') + meta(remote.db, QStringLiteral("revision"));
     QString key = QStringLiteral("remote:") + sourcePath;
@@ -625,8 +689,8 @@ void Database::mergeFrom(QString sqlitePath) {
         }
         flush();
     };
-    mergeChanges(QStringLiteral("SELECT normalized,pair,deleted_ticks FROM deleted_words"), true);
-    mergeChanges(QStringLiteral("SELECT normalized,pair,favorite,updated_at FROM favorite_events"), false);
+    if (hasTable(remote.db, QStringLiteral("deleted_words"))) mergeChanges(QStringLiteral("SELECT normalized,pair,deleted_ticks FROM deleted_words"), true);
+    if (hasTable(remote.db, QStringLiteral("favorite_events"))) mergeChanges(QStringLiteral("SELECT normalized,pair,favorite,updated_at FROM favorite_events"), false);
     {
         auto rows = query(remote.db, QStringLiteral("SELECT s.payload,w.favorite,w.favorite_at FROM sources s JOIN words w ON w.id=s.word_id"));
         struct Item { QJsonObject entry; qint64 intent; }; QList<Item> batch;
@@ -661,8 +725,8 @@ void Database::backupTo(QString destination) const {
         input.close(); QFile::remove(temporary);
     } catch (...) { QFile::remove(temporary); throw; }
 }
-qint64 Database::revision() const { Connection c(filePath, true); verify(c.db, user); return meta(c.db, QStringLiteral("revision")).toLongLong(); }
-qint64 Database::syncedRevision() const { Connection c(filePath, true); verify(c.db, user); return meta(c.db, QStringLiteral("synced")).toLongLong(); }
+qint64 Database::revision() const { Connection c(filePath, true); verify(c.db, user, true); return meta(c.db, QStringLiteral("revision")).toLongLong(); }
+qint64 Database::syncedRevision() const { Connection c(filePath, true); verify(c.db, user, true); return meta(c.db, QStringLiteral("synced")).toLongLong(); }
 void Database::markSynced(qint64 revision) {
     Connection c(filePath); verify(c.db, user); Transaction tx(c.db);
     auto current = meta(c.db, QStringLiteral("revision")).toLongLong(); auto previous = meta(c.db, QStringLiteral("synced")).toLongLong();

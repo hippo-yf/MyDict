@@ -9,6 +9,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
+#include <QSet>
 #include <QSysInfo>
 #include <stdexcept>
 
@@ -92,28 +93,50 @@ QString CacheSync::run(QString directory,QJsonObject settings,QString dbPath,QSt
     if (git.call({"config","--get","remote.origin.url"})!=repository) error(QStringLiteral("同步仓库地址不匹配。"));
     git.call({"config","user.name","MyDict Qt"}); git.call({"config","user.email","mydict@users.noreply.gitee.com"});
     Database db(dbPath,username); db.initialize();
-    const auto folder=QDir(root).filePath("qt-users/"+username); QDir().mkpath(folder);
+    const auto sharedFolder=QDir(root).filePath("users/"+username+"/shared");
+    const auto legacyQtFolder=QDir(root).filePath("qt-users/"+username);
+    const auto legacyCsFolder=QDir(root).filePath("users/"+username);
+    QByteArray identity=QSysInfo::machineUniqueId()+"\n"+qgetenv("USER")+qgetenv("USERNAME")+"\n"+options.value("DeviceId").toString().toUtf8();
+    const auto relative="users/"+username+"/shared/qt-"+hash(identity,32)+".sqlite";
+    const auto ownSnapshot=QFileInfo(QDir(root).filePath(relative)).absoluteFilePath();
+    bool needsCsUpgrade=false;
     auto pull=[&]() {
         git.call({"fetch","origin"});
         if (!git.call({"rev-parse","--verify","refs/remotes/origin/main"},true).isNull()) {
             if (!git.call({"rev-parse","--verify","HEAD"},true).isNull()) git.rebase();
             else git.call({"checkout","-B","main","origin/main"});
         }
-        for (const auto &name: QDir(folder).entryList({"*.sqlite"},QDir::Files)) {
-            git.checkCanceled();db.mergeFrom(QDir(folder).filePath(name));
+        int sharedCount=0,binaryCount=0;QSet<QString> seen;
+        for(const auto &folder:{sharedFolder,legacyQtFolder,legacyCsFolder}) {
+            const bool oldCsharp=folder==legacyCsFolder;
+            for (const auto &name: QDir(folder).entryList({"*.sqlite"},QDir::Files)) {
+                git.checkCanceled();const auto snapshot=QFileInfo(QDir(folder).filePath(name)).absoluteFilePath();
+                auto canonical=QFileInfo(snapshot).canonicalFilePath();
+                if(seen.contains(canonical))continue;seen.insert(canonical);
+                // Old C# 1.5.1 snapshots contain gzip binary XML. Qt leaves them
+                // untouched; an updated C# client publishes their JSON upgrade.
+                if(oldCsharp&&!Database::isJsonSnapshot(snapshot)){++binaryCount;continue;}
+                if(folder==sharedFolder)++sharedCount;
+                // A fresh installation must restore even its own device shard.
+                // Once acknowledged, re-importing our last backup only churns
+                // local remote fingerprints and is unnecessary.
+                if(snapshot==ownSnapshot&&db.syncedRevision()>0
+                    &&Database(snapshot,username).revision()<=db.syncedRevision())continue;
+                db.mergeFrom(snapshot);
+            }
         }
+        needsCsUpgrade=binaryCount>0&&sharedCount==0;
     };
     pull();
-    if(pullOnly) return QStringLiteral("已拉取 Qt 词库，本地 SQLite 已保存。");
-    QByteArray identity=QSysInfo::machineUniqueId()+"\n"+qgetenv("USER")+qgetenv("USERNAME")+"\n"+options.value("DeviceId").toString().toUtf8();
-    const auto relative="qt-users/"+username+"/"+hash(identity,32)+".sqlite";
+    const auto upgradeNote=[&]{return needsCsUpgrade?QStringLiteral(" 检测到旧 C# 二进制词库；请在新版 C# 客户端使用相同 username 同步一次，完成公共格式转换。旧文件已保留。"):QString();};
+    if(pullOnly) return QStringLiteral("已拉取共享词库，本地 SQLite 已保存。")+upgradeNote();
     // Read the revision before backup: any concurrent change remains pending.
     git.checkCanceled();const qint64 revision=db.revision(); db.backupTo(QDir(root).filePath(relative));
     git.call({"add","--",relative});
     if (!git.call({"diff","--cached","--name-only","--",relative}).isEmpty())
         git.call({"-c","commit.gpgsign=false","commit","-m","Sync Qt SQLite cache for "+username,"--only","--",relative});
     for(int attempt=0;attempt<3;++attempt) {
-        if (!git.call({"push","origin","HEAD:main"},true).isNull()) { db.markSynced(revision); return QStringLiteral("同步完成，Qt 词库已保存到 Gitee。"); }
+        if (!git.call({"push","origin","HEAD:main"},true).isNull()) { db.markSynced(revision); return QStringLiteral("同步完成，共享词库已保存到 Gitee。")+upgradeNote(); }
         pull();
         // Merge newly fetched content before publishing another local snapshot.
         db.backupTo(QDir(root).filePath(relative)); git.call({"add","--",relative});

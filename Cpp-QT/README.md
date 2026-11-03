@@ -1,6 +1,8 @@
 # 拾词 MyDict — C++ / Qt
 
-以 C# / WPF **1.5.1** 为功能基线的 Qt Widgets 版本，C++17、Qt 6、CMake、Conda。作者 **Yance Feng & Codex**，应用源码 MIT 许可。保留逐义双语释义、DeepSeek、收藏/查询统一 SQLite、历史、分页、字体样式热更新、导入和 Gitee 同步。
+以 C# / WPF **1.5.1** 为功能基线的 Qt Widgets 版本，C++17、Qt 6、CMake、Conda。作者 **Yance Feng & Codex**，应用源码 MIT 许可。保留逐义双语释义、DeepSeek、收藏/查询统一 SQLite、历史、分页、字体样式热更新、导入和 Gitee 同步。本次共享版本让 **C#、Windows Qt、macOS Qt、Linux Qt 通过同一 Gitee 词库双向共享**。
+
+跨平台接入步骤、升级和格式约定见 [共享词库说明](docs/SHARED_WORDBOOK.md)，配置参考 [共享用户示例](configs/shared-user.example.json)。固定旧版 `v1.5.1` 不支持公共 JSON 载荷，参与共享的 C# 与 Qt 客户端都需要升级到本次共享版本。
 
 ## 界面预览
 
@@ -75,7 +77,9 @@ Windows 的 `CMAKE_PREFIX_PATH` 使用 Conda 环境下的 `Library`，生成器�
 
 ## 设置和数据目录
 
-程序首次启动生成 `settings.json`。示例见 `settings.qt.example.json`，每组带中文说明。DeepSeek 默认关闭且密钥为空；普通来源支持 MyMemory、LibreTranslate、Free Dictionary API 和 Wiktionary。
+程序首次启动生成 `settings.json`。示例见 [`settings.qt.example.json`](settings.qt.example.json)，每组带中文说明。默认 `username` 留空以隔离不同设备，`CacheSync` 和 DeepSeek 默认关闭，密钥为空；普通来源支持 MyMemory、LibreTranslate、Free Dictionary API 和 Wiktionary。
+
+共享时，同一个人在 C# 和三平台 Qt 的本地设置中手动填写**相同的 `username` 和 `CacheSync.Repository`**，各设备保留独立的 `DeviceId`、SSH 路径及 API 密钥。`username` 是词库身份，不是 Gitee 登录名；留空生成的本机身份不能保证跨设备相同。不要复制整份真实设置，也不要把示例中的 `your-user` 作为所有人的默认身份。
 
 ```json
 {
@@ -102,16 +106,23 @@ MyDictTool --data-dir /path/to/mydict-data --check
 词库统一为：
 
 ```text
-<data-dir>/profiles/<username>/words-qt.sqlite
+<data-dir>/profiles/<username>/words-shared.sqlite
 ```
 
-单个 SQLite 文件保存所有来源、收藏、历史、删除事件和导入错误。分页不解码 BLOB。Qt 载荷采用带 `MYDICT-QT-JSON1` 标记的 UTF-8 JSON，保存在 SQLite BLOB 中；没有独立 JSON 查询缓存。
+单个 SQLite 文件保存所有来源、收藏、历史、删除事件和导入错误。分页不解码 BLOB。C# 与 Qt 的公共载荷使用 `MYDICT-JSON1` 加换行作为前缀，随后是 UTF-8 JSON，字段采用相同的 PascalCase；数据库 `payload_format` 为 `mydict-json-v1`。JSON 仍保存在 SQLite BLOB 中，不生成独立 JSON 查询缓存。
 
-**与 C# 版格式隔离：** C# 的 `words.sqlite` 采用 GZip/.NET 二进制 XML，Qt 不直接覆盖、读取或改写它。文件名、载荷标记和同步目录均隔离。两个版本可并存；跨设备 Qt 实例可直接同步，C# ↔ Qt 交换必须经过迁移。
+旧本地 `words-qt.sqlite`、C# 的 `words.sqlite` 和远端旧快照均保留。Qt 启动显示窗口后，在后台只读导入旧 Qt 库；新版 C# 可读取旧二进制 XML、旧 Qt JSON 和公共 JSON，并把旧内容转换为公共快照。Qt 不尝试解析旧 .NET 二进制 XML，需要由新版 C# 完成这一步转换。历史和导入错误属于本地状态，不在设备间合并。
 
-## 从现有 C# 词库迁移
+## 接入现有 C# 和 Qt 词库
 
-先关闭两个版本。在 Windows 根仓库中执行：
+日常跨平台共享不再需要手动导出文件：
+
+1. 在持有旧 C# 词库的 Windows 设备上升级为本次共享版本，保留原 `settings.json`、`profiles/` 和旧 SQLite。先确认 `username` 是自己要共用的身份。
+2. 使用新版 C# 点击“同步”，它会读取旧本地及旧远端二进制快照，并发布公共 JSON 快照。原文件保留。C# 共享版的编译和部署入口见 [仓库 README](../README.md)。
+3. 在 Windows/macOS/Linux Qt 中填写相同 `username` 和仓库地址，各自配置本机 SSH 权限，启用 `CacheSync` 后点击“同步”。三平台即可读取这些公共释义、收藏和删除状态；新的查询和变更也会同步回 C#。
+4. 已使用 Qt 版的设备会在后台导入本机旧 Qt 库；同步时兼容读取 `qt-users/<username>/` 的旧 Qt 快照，并发布到公共目录，无需删除旧文件。
+
+如果只有旧 C# 数据的离线副本，或者暂时不能运行新版 C#，仍可使用可选的只读导出工具。在 Windows 根仓库中执行：
 
 ```powershell
 .\Cpp-QT\tools\Export-Legacy.ps1 -SourceDatabase '原路径\profiles\用户名\words.sqlite' -OutputFile '新路径\mydict-migration.ndjson'
@@ -125,7 +136,7 @@ Qt 目标配置 `username` 应与源库相同，再执行：
 MyDictTool --data-dir /path/to/qt-data --import-json /path/to/mydict-migration.ndjson --check
 ```
 
-也可在单词本的“⋯”菜单选择迁移文件。导入为一个事务，错误回滚，重复导入幂等。迁移后复制 Qt 的数据目录到 macOS/Linux 即可，不再需要 .NET。
+也可在单词本的“⋯”菜单选择迁移文件。导入为一个事务，错误回滚，重复导入幂等。此方式用于离线搬运；启用公共同步后无需为每次设备间交换重复导出。
 
 ## 导入编号单词本
 
@@ -146,7 +157,16 @@ MyDictTool --data-dir /path/to/data --export-csv /path/to/words.csv --favorites-
 
 `CacheSync` 默认关闭，配置自己的 Git/SSH 权限后启用。手动顶部“同步”可立即执行。启动自动只拉取；本地内容变更约 30 分钟后批量同步；关闭取消网络，不丢已提交本地事务。
 
-Qt 仅同步 `qt-users/<username>/<device-hash>.sqlite`，不会修改 C# 的 `users/` 分片，不生成 JSON 快照，不提交配置或密钥。按来源时间、收藏事件和删除标记合并，多设备都需使用 Qt 版，`username` 相同才能共享。
+公共快照位置统一为：
+
+```text
+users/<username>/shared/cs-<device-hash>.sqlite
+users/<username>/shared/qt-<device-hash>.sqlite
+```
+
+C# 与 Qt 每个客户端写自己的分片，并按来源查询时间、收藏事件及删除标记合并其他分片。这里的 `cs`/`qt` 只区分写入客户端，公共数据格式相同；无需为每个平台创建独立词库。旧 `users/<username>/*.sqlite` 和 `qt-users/<username>/*.sqlite` 保留为兼容读取来源，不会因升级被删除或原地覆盖。
+
+共享身份相同才会交换数据，不共享 API Key、SSH 私钥、`settings.json`、字体或窗口状态。不生成 JSON 快照。具体配置和升级检查见 [共享词库说明](docs/SHARED_WORDBOOK.md)。固定旧版 1.5.1 不读取公共 JSON，应升级后再参与新的双向共享。
 
 ## 测试与代码入口
 

@@ -384,7 +384,7 @@ namespace MyDict
             string profile=Path.Combine(Path.GetDirectoryName(SettingsStore.FilePath),"profiles",configuration.username);
             try {
                 var db=await Task.Run(()=>{
-                    var value=new WordDatabase(Path.Combine(profile,"words.sqlite"),configuration.username);value.Open();
+                    var value=WordDatabase.OpenShared(profile,configuration.username);
                     string lookup=Path.Combine(profile,"lookup-cache.json"),favorite=Path.Combine(profile,"favorites.json");
                     if(!File.Exists(lookup)&&!File.Exists(favorite)&&value.Page("",false,0,1).Total==0){
                         string ownerPath=Path.Combine(Path.GetDirectoryName(SettingsStore.FilePath),".legacy-cache-owner");

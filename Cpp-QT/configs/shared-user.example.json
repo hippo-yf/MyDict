@@ -1,0 +1,41 @@
+{
+  "username": "your-user",
+  "CacheSync": {
+    "Enabled": true,
+    "Repository": "git@gitee.com:hippo-yf/MyDict-Cache.git",
+    "PrivateKeyPath": "",
+    "KnownHostsPath": "",
+    "DeviceId": "",
+    "_说明": {
+      "Enabled": "此示例演示开启共享。先完成各设备 Git/SSH 权限配置，再使用；启动只拉取，变更约 30 分钟后批量同步，也可点击同步立即执行。",
+      "Repository": "共享成员使用同一个有读写权限的 Gitee SSH 词库仓库。示例地址沿用 MyDict 的数据仓库约定，使用者应换成自己具有权限的仓库。",
+      "PrivateKeyPath": "仅填写当前设备自己的私钥路径，或留空使用本机 SSH 默认配置。Windows、macOS、Linux 的路径分别配置；私钥不随词库同步，不在设备间复制。",
+      "KnownHostsPath": "仅填写当前设备已核验的 known_hosts 路径，或留空使用本机默认位置。",
+      "DeviceId": "新设备首次使用此示例时留空，让程序为该设备生成固定种子。已有设备保留自己的值，不复制别的设备已生成的值。"
+    }
+  },
+  "DeepSeek": {
+    "Enabled": false,
+    "ApiKey": "",
+    "Endpoint": "https://api.deepseek.com/chat/completions",
+    "Model": "deepseek-flash",
+    "TimeoutSeconds": 90,
+    "MaxTokens": 8192,
+    "_说明": {
+      "Enabled": "共享已有释义不需要打开 DeepSeek；仅在本设备需要通过 API 查询时开启。",
+      "ApiKey": "需要查询时填写本设备使用的密钥；该字段不是词库同步内容，不应提交到 Git。",
+      "Endpoint": "完整 HTTPS Chat Completions 接口地址。",
+      "Model": "按服务提供方实际支持情况配置。",
+      "TimeoutSeconds": "API 总超时秒数，范围 10–300。",
+      "MaxTokens": "输出上限，范围 512–16384。"
+    }
+  },
+  "_说明": {
+    "示例用途": "这不是默认配置，不会被程序自动加载。仅用于说明跨平台共享所需字段；其他设置和样式由程序默认值补齐。",
+    "username": "先把 your-user 改为你自己的固定词库身份。你自己的 C#、Windows Qt、macOS Qt、Linux Qt 设置使用同一值，其他人使用不同值。不要将这个占位值设置为所有人的默认值。仅允许 1–64 位小写字母、数字、下划线或连字符。",
+    "复制方式": "建议把需要的字段合并到各设备已有 settings.json，保留各自 DeviceId、SSH 路径、API 密钥、字体和窗口设置。不要把某台设备的真实设置整份公开或盲目覆盖其他设备。",
+    "本地词库": "profiles/<username>/words-shared.sqlite；旧库保留并后台迁移，不需要删除。",
+    "公共快照": "users/<username>/shared/cs-<device-hash>.sqlite 或 qt-<device-hash>.sqlite。同一个人共用 username，每个客户端写自己的设备分片。",
+    "客户端版本": "C# 与 Qt 都需使用本次支持公共载荷的共享版本；固定旧版 1.5.1 不支持新的双向共享。"
+  }
+}

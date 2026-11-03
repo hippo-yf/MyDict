@@ -188,15 +188,27 @@ namespace MyDict
                     Git("config user.name MyDict");Git("config user.email mydict@users.noreply.gitee.com");Git("fetch origin");
                     bool remote=Git("rev-parse --verify refs/remotes/origin/main",true)!=null,local=Git("rev-parse --verify HEAD",true)!=null;
                     if(remote){if(local)RebaseRemote();else Git("checkout -B main origin/main");}
-                    string folder=Path.Combine(directory,"users",database.Username);Directory.CreateDirectory(folder);
-                    foreach(string file in Directory.GetFiles(folder,"*.sqlite"))database.MergeFrom(file);
+                    string userFolder=Path.Combine(directory,"users",database.Username);
+                    string folder=Path.Combine(userFolder,"shared");Directory.CreateDirectory(folder);
+                    string relative="users/"+database.Username+"/shared/cs-"+deviceId+".sqlite";
+                    // Read the common protocol and both historical namespaces. Only
+                    // the shared subdirectory is written; fixed 1.5.1 clients do
+                    // not recurse into it and will never decode an unfamiliar BLOB.
+                    Action merge=()=>{
+                        foreach(string sourceFolder in new[]{folder,userFolder,Path.Combine(directory,"qt-users",database.Username)})
+                            if(Directory.Exists(sourceFolder))foreach(string file in Directory.GetFiles(sourceFolder,"*.sqlite").OrderBy(path=>path,StringComparer.Ordinal))database.MergeFrom(file);
+                    };
+                    merge();
                     if(!upload)return;
-                    string shard=Path.Combine(folder,deviceId+".sqlite");long revision=database.BackupTo(shard);
-                    Git("add -- "+Quote("users/"+database.Username+"/"+deviceId+".sqlite"));
-                    if(!string.IsNullOrEmpty(Git("diff --cached --name-only -- "+Quote("users/"+database.Username+"/"+deviceId+".sqlite"))))Git("-c commit.gpgsign=false commit -m "+Quote("Sync SQLite cache for "+database.Username)+" --only -- "+Quote("users/"+database.Username+"/"+deviceId+".sqlite"));
+                    string shard=Path.Combine(directory,relative);long revision=database.BackupTo(shard);
+                    Action commit=()=>{
+                        Git("add -- "+Quote(relative));
+                        if(!string.IsNullOrEmpty(Git("diff --cached --name-only -- "+Quote(relative))))Git("-c commit.gpgsign=false commit -m "+Quote("Sync shared SQLite cache for "+database.Username)+" --only -- "+Quote(relative));
+                    };
+                    commit();
                     for(int attempt=0;attempt<3;attempt++){
                         if(Git("push origin HEAD:main",true)!=null){database.MarkSynced(revision);return;}
-                        Git("fetch origin");RebaseRemote();
+                        Git("fetch origin");RebaseRemote();merge();revision=database.BackupTo(shard);commit();
                     }
                     throw new IOException("Gitee 推送失败；SQLite 本地数据已保存，下次同步将重试。");
                 }

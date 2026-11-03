@@ -39,6 +39,17 @@ void sql(QString path, const std::function<void(QSqlDatabase &)> &action) {
     QSqlDatabase::removeDatabase(name);
 }
 QByteArray bytes(QString path) { QFile file(path); if (!file.open(QIODevice::ReadOnly)) return {}; return file.readAll(); }
+void makeOldQtSnapshot(QString path) {
+    sql(path, [](QSqlDatabase &connection) {
+        QSqlQuery q(connection);QVERIFY(q.exec("UPDATE metadata SET value='qt-json-v1' WHERE key='payload_format'"));
+        QVERIFY(q.exec("SELECT source_key,payload FROM sources"));QList<QPair<QString,QByteArray>> rows;
+        while(q.next())rows.append({q.value(0).toString(),q.value(1).toByteArray()});q.finish();
+        for(const auto &row:rows){QVERIFY(row.second.startsWith("MYDICT-JSON1\n"));
+            QVERIFY(q.prepare("UPDATE sources SET payload=? WHERE source_key=?"));
+            q.addBindValue(QByteArray("MYDICT-QT-JSON1\n")+row.second.mid(13));q.addBindValue(row.first);QVERIFY(q.exec());}
+        QVERIFY(q.exec("PRAGMA wal_checkpoint(TRUNCATE)"));
+    });
+}
 }
 
 class StorageTest : public QObject {
@@ -65,7 +76,7 @@ private slots:
         QVERIFY(!firstRun.data["CacheSync"].toObject()["DeviceId"].toString().isEmpty());
         Settings s(temp.path()); s.load();
         QVERIFY(s.username().startsWith("device-"));
-        QVERIFY(s.databasePath().endsWith("/words-qt.sqlite"));
+        QVERIFY(s.databasePath().endsWith("/words-shared.sqlite"));
         QString user = s.username();
         s.data["_personal_note"] = "preserved";
         s.data["Window"] = QJsonObject{{"Width", 750}, {"Height", 650}};
@@ -190,11 +201,35 @@ private slots:
             QVERIFY(q.exec("CREATE TABLE sources(payload BLOB)")); QVERIFY(q.exec("INSERT INTO sources VALUES(x'1f8b0800')"));
         });
         auto original = bytes(path); Database db(path, "tester");
+        QVERIFY(!Database::isJsonSnapshot(path));
         QVERIFY_EXCEPTION_THROWN(db.initialize(), std::runtime_error);
         QCOMPARE(bytes(path), original);
         Database mismatch(temp.filePath("other.sqlite"), "other"); mismatch.initialize();
         Database target(temp.filePath("qt.sqlite"), "tester"); target.initialize();
         QVERIFY_EXCEPTION_THROWN(target.mergeFrom(mismatch.path()), std::runtime_error);
+    }
+    void sharedPayloadAndReadOnlyQtUpgradePreserveLocalState() {
+        QTemporaryDir temp;const auto oldPath=temp.filePath("words-qt.sqlite");Database old(oldPath,"tester");old.initialize();
+        auto keep=entry("keep","AI summary","2026-01-01T00:00:00.1234567Z",true);
+        old.store(keep);old.setFavorite("keep","en|zh-CN",true);
+        old.store(entry("other","other","2026-01-01T00:00:00.1234568Z"));
+        const auto deleted=entry("deleted","old","2026-01-01T00:00:00Z");old.store(deleted);
+        QVERIFY(old.remove(old.page("deleted",false,0).rows.first().id));old.recordImportError("fixture","old failure");
+        makeOldQtSnapshot(oldPath);const auto original=bytes(oldPath);
+        QVERIFY(Database::isJsonSnapshot(oldPath));QCOMPARE(old.find("keep","en|zh-CN")["Summary"].toString(),QString("AI summary"));
+        QVERIFY_EXCEPTION_THROWN(old.initialize(),std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(old.store(keep),std::runtime_error);
+        QCOMPARE(bytes(oldPath),original);
+        Database shared(temp.filePath("words-shared.sqlite"),"tester");shared.initialize();
+        QCOMPARE(shared.page({},false,0).total,2);QVERIFY(shared.isFavorite("keep","en|zh-CN"));
+        QCOMPARE(shared.navigate(0)["Word"].toString(),QString("other"));QCOMPARE(shared.navigate(-1)["Word"].toString(),QString("keep"));
+        shared.store(deleted);QVERIFY(shared.find("deleted","en|zh-CN").isEmpty());
+        sql(shared.path(),[](QSqlDatabase &connection){QSqlQuery q(connection);QVERIFY(q.exec("SELECT value FROM metadata WHERE key='payload_format'"));QVERIFY(q.next());QCOMPARE(q.value(0).toString(),QString("mydict-json-v1"));
+            QVERIFY(q.exec("SELECT payload,ticks FROM sources ORDER BY ticks DESC"));QVERIFY(q.next());QVERIFY(q.value(0).toByteArray().startsWith("MYDICT-JSON1\n"));
+            QCOMPARE(q.value(1).toLongLong()%10000000,qint64(1234568));QVERIFY(q.exec("SELECT COUNT(*) FROM import_errors"));QVERIFY(q.next());QCOMPARE(q.value(0).toInt(),1);});
+        shared.setFavorite("keep","en|zh-CN",false);const auto revision=shared.revision();shared.initialize();
+        QCOMPARE(shared.revision(),revision);QVERIFY(!shared.isFavorite("keep","en|zh-CN"));
+        QCOMPARE(shared.navigate(0)["Word"].toString(),QString("keep"));QCOMPARE(bytes(oldPath),original);
     }
 };
 QTEST_GUILESS_MAIN(StorageTest)

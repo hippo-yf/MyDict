@@ -24,5 +24,5 @@ if(!$vs){throw '未找到 VS2022。'}
 & (Join-Path $vs 'MSBuild/Current/Bin/Roslyn/csc.exe') /nologo /platform:x64 ('/out:'+(Join-Path $out 'WordbookImport.exe')) ('/r:'+$assembly) /r:System.Net.Http.dll /r:System.Web.Extensions.dll (Join-Path $PSScriptRoot 'WordbookImport.cs')
 if($LASTEXITCODE -ne 0){throw '导入脚本编译失败。'}
 & (Join-Path $out 'WordbookImport.exe') $inputPath $settings $Limit ([int]($DelaySeconds*1000)) $Retries $ForceRefresh.IsPresent.ToString() $DryRun.IsPresent.ToString() $Concurrency
-if($LASTEXITCODE -eq 2){Write-Warning '部分词条失败，详情保存在 words.sqlite 的 import_errors 表；再次执行可重试。'}
+if($LASTEXITCODE -eq 2){Write-Warning '部分词条失败，详情保存在 words-shared.sqlite 的 import_errors 表；再次执行可重试。'}
 elseif($LASTEXITCODE -ne 0){throw '导入已停止；查看上方错误，成功结果可在下次运行时恢复。'}

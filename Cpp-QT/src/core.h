@@ -57,13 +57,16 @@ public:
     void exportCsv(QString path, QString filter, bool favoritesOnly) const;
     // Streamed NDJSON mydict-portable-v1, emitted by Export-Legacy.cs.
     void importEntries(QString jsonPath);
-    // Only qt-json-v1 databases are accepted. C# binary XML is never decoded here.
+    // Shared mydict-json-v1 and old qt-json-v1 snapshots are read-only inputs.
+    // C# binary XML must first be converted by an updated C# client.
     void mergeFrom(QString sqlitePath);
+    static bool isJsonSnapshot(QString sqlitePath);
     void backupTo(QString path) const;
     qint64 revision() const;
     qint64 syncedRevision() const;
     void markSynced(qint64 revision);
 private:
     QString filePath, user;
+    void migrateLocalQt();
 };
 } // namespace MyDict

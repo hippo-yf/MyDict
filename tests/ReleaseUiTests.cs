@@ -24,7 +24,7 @@ class ReleaseUiTests
   string folder=Path.Combine(Path.GetTempPath(),"mydict-sqlite-ui-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);var app=new App();Resources(app);app.ShutdownMode=ShutdownMode.OnExplicitShutdown;SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());MainWindow window=null;
   try {
    string settings=Path.Combine(folder,"settings.json");typeof(SettingsStore).GetField("FilePath").SetValue(null,settings);SettingsStore.Save(new AppSettings{username="ui-test",CacheSync=new CacheSyncOptions{Enabled=false}});
-   var data=new WordDatabase(Path.Combine(folder,"profiles","ui-test","words.sqlite"),"ui-test");data.Open();for(int i=0;i<125;i++)data.Save(new Entry{Word="word"+i,Pair="en|zh-CN",Translation="含义 "+i,TranslationProvider="MyMemory",SuccessfulQueryAtUtc="2026-11-03T00:00:00Z"},i%2==0);
+   var data=WordDatabase.OpenShared(Path.Combine(folder,"profiles","ui-test"),"ui-test");for(int i=0;i<125;i++)data.Save(new Entry{Word="word"+i,Pair="en|zh-CN",Translation="含义 "+i,TranslationProvider="MyMemory",SuccessfulQueryAtUtc="2026-11-03T00:00:00Z"},i%2==0);
    window=new MainWindow();Check(Field(window,"database")==null,"Constructor loaded database before showing the window");window.Show();window.UpdateLayout();Check(window.Icon!=null,"Icon missing");
    Pump(()=> (bool)Field(window,"databaseReady")&&((ListBox)window.FindName("FavoritesList")).Items.Count==50);
    var database=(WordDatabase)Field(window,"database");Check(database.DecodedEntries==0,"Startup/book page decoded full vocabulary");var book=(ListBox)window.FindName("FavoritesList");

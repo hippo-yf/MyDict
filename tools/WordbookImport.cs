@@ -49,7 +49,7 @@ public static class WordbookImport
   string profile=Path.Combine(Path.GetDirectoryName(settingsPath),"profiles",settings.username);Directory.CreateDirectory(profile);
   using(var importLock=new FileStream(Path.Combine(profile,".import-deepseek.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None))
   {
-   var database=new WordDatabase(Path.Combine(profile,"words.sqlite"),settings.username);database.Open();
+   var database=WordDatabase.OpenShared(profile,settings.username);
    database.MigrateLegacy(Path.Combine(profile,"lookup-cache.json"),Path.Combine(profile,"favorites.json"));
    // Replay legacy JSONL once, then retain it as a backup. New results commit directly to SQLite.
    string journal=Path.Combine(profile,".import-deepseek.jsonl");

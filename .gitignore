@@ -46,3 +46,6 @@ cache-sync/
 !/tests/FontTests.cs
 
 !/tests/WordRemovalTests.cs
+!/tests/SharedCacheTests.cs
+!/tests/CrossClientCacheTests.cs
+!/tests/SharedMaintenanceTests.cs

@@ -33,6 +33,6 @@ with tempfile.TemporaryDirectory(prefix='mydict-packaged-') as data:
     subprocess.run([str(gui),'--data-dir',data,'--smoke-test'],env=env,check=True,timeout=30)
     settings=Path(data)/'settings.json'
     assert settings.exists(), 'packaged application did not initialize settings'
-    databases=list((Path(data)/'profiles').rglob('words-qt.sqlite'))
+    databases=list((Path(data)/'profiles').rglob('words-shared.sqlite'))
     assert len(databases)==1, 'packaged application did not initialize SQLite'
 print('Packaged GUI/SQLite smoke test passed without Conda activation.')

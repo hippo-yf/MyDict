@@ -7,12 +7,12 @@
     "KnownHostsPath": "",
     "DeviceId": "",
     "_说明": {
-      "username": "根级 username 留空时按本机 MachineGuid 和 Windows 用户 SID 的哈希生成固定 device- 名称，已有值保留。同一 username 跨设备同步，不同 username 分开保存。只允许 1–64 位小写字母、数字、下划线或连字符。",
+      "username": "根级 username 是词库身份，不是 Git/SSH 登录名。留空会生成本机隔离身份，不保证不同系统或设备相同；需要共享时，请由同一个人在 C#、Windows/macOS/Linux Qt 的各份本地设置中手动填写同一值。不同人使用不同值；仅允许 1–64 位小写字母、数字、下划线或连字符。",
       "Enabled": "默认关闭；启用后启动只拉取，首次本地变更后约 30 分钟批量同步。关闭窗口取消网络同步，本地事务保存不受影响。",
-      "Repository": "预先创建的 Gitee SSH 缓存仓库，各设备的 SSH 密钥需有读写权限。",
-      "PrivateKeyPath": "本机私钥完整路径，留空使用 SSH 默认配置或 agent；密钥不上传。",
-      "KnownHostsPath": "可选的 known_hosts 文件完整路径，留空使用 SSH 默认位置；需先确认 Gitee 主机密钥。",
-      "DeviceId": "留空后自动生成并固定的随机设备种子，结合本机与系统用户区分设备；一般无需修改。"
+      "Repository": "预先创建的 Gitee SSH 词库仓库。共享的 C# 与 Qt 客户端填写同一地址，所有设备各自具有读写权限；公共快照位于 users/<username>/shared/。",
+      "PrivateKeyPath": "该设备本机的 SSH 私钥路径，留空使用该系统的 SSH 默认配置或 agent。相对路径从本地数据目录解析。各系统分别配置，不在设备间复制或提交私钥。",
+      "KnownHostsPath": "该设备本机的 known_hosts 路径，留空使用该系统 SSH 默认位置；相对路径从本地数据目录解析。使用前核验 Gitee 主机密钥，不复制未核验的主机信任记录。",
+      "DeviceId": "每台设备单独生成并保持不变的随机种子，用来派生设备快照文件名；留空会自动生成。只在新设备首次设置时留空，不要复制其他设备已生成的 DeviceId，也不要在每次启动时重置。"
     }
   },
   "FontName": "Microsoft YaHei UI",
@@ -49,22 +49,23 @@
     }
   },
   "_说明": {
+    "username": "词库共享身份：同一个人在各平台和 C#/Qt 客户端填写同一值，不同人填写不同值。留空只生成本机身份，不会自动识别为跨设备同一用户。不要直接把共享示例中的占位值当作所有人的默认值。",
     "FontName": "旧版界面字体兼容字段；当前显示字体请在 Styles 中修改。",
     "FontSize": "旧版字号兼容字段，保留范围 12–28；当前显示字号由 Styles 决定。",
     "DefinitionFontName": "旧版英文释义字体兼容字段；当前使用 Styles 中的 font.doc.serif。",
     "DelayMs": "停止输入后自动查询的等待时间，单位毫秒，范围 300–3000。",
     "Provider": "翻译来源：MyMemory 或 LibreTranslate。",
     "LibreUrl": "LibreTranslate 完整 /translate 接口地址；公共服务器使用 HTTPS，本机可使用 HTTP。",
-    "ApiKey": "手动填写的翻译服务密钥，留空时读取 ProtectedApiKey；此字段填写后以明文保存，请勿公开。",
-    "ProtectedApiKey": "由 Windows 当前用户加密的旧版密钥；通常无需手动修改，清除时设为 null。",
+    "ApiKey": "该设备的普通翻译服务密钥，以明文保存在本地设置中，不随词库同步；请勿公开。Qt 不解密 C# 旧 ProtectedApiKey，需要在此重新填写。",
+    "ProtectedApiKey": "C# Windows 当前用户加密的旧密钥兼容字段；Qt 不跨平台解密它。Qt 请填写本地 ApiKey，该字段可保持 null。",
     "ShowExamples": "是否显示词典例句：true 显示，false 隐藏。",
     "ShowDerived": "是否显示派生词及搭配：true 显示，false 隐藏。",
     "Window": "上次关闭时保存的窗口位置、大小及最大化状态；一般由程序自动维护。",
-    "DeepSeek": "DeepSeek API 查询开关、密钥、接口地址和模型。启用后只在点击查询按钮时调用 API。",
+    "DeepSeek": "DeepSeek 查询开关、密钥、接口地址和模型。启用后输入只读缓存，查询按钮、回车或点击未缓存释义词时才调用 API；密钥各设备单独配置，不随词库同步。",
     "Styles": "按用途分组的显示样式；只修改样式键的值，保存后自动重新加载。未填写的键使用内置默认值。",
     "_说明": "中文使用说明，不参与程序配置；可修改说明文字。JSON 不支持 // 注释。",
     "_配置版本": "配置排版版本，请保持为 3。",
-    "Qt": "Qt 版保存 profiles/<username>/words-qt.sqlite，并使用 qt-users 同步目录，与 C# 版隔离。Windows 默认 EXE 旁；macOS/Linux 默认系统用户数据目录，可用 --data-dir 指定。ProtectedApiKey 不跨平台，请重新填写 ApiKey。"
+    "Qt": "本次共享版本使用 profiles/<username>/words-shared.sqlite，公共同步目录为 users/<username>/shared/；C# 与三平台 Qt 共用公共 JSON 载荷。旧 words-qt.sqlite 在后台只读导入并保留，旧 C# 二进制载荷由新版 C# 转换发布。Windows 默认 EXE 旁；macOS/Linux 默认系统用户数据目录，可用 --data-dir 指定。固定 1.5.1 旧客户端需要升级后才能参与双向共享。"
   },
   "_配置版本": 3,
   "DeepSeek": {

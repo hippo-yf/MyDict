@@ -9,9 +9,13 @@
 #include <QCryptographicHash>
 #include <QLockFile>
 #include <QJsonObject>
+#include <QSqlDatabase>
+#include <QSqlQuery>
+#include <QUuid>
 #include <QThread>
 #include <QTimer>
 #include <stdexcept>
+#include <functional>
 #include <thread>
 
 using namespace MyDict;
@@ -38,6 +42,29 @@ QString cacheRoot(QString dir,QString repository){
     return QDir(dir).filePath("cache-sync/qt-"+hash);
 }
 void write(QString path,QByteArray bytes){QFile f(path);if(!f.open(QIODevice::WriteOnly)||f.write(bytes)!=bytes.size())throw std::runtime_error("fixture write");}
+void editSql(QString path,std::function<void(QSqlDatabase &)> action){
+    const auto name=QUuid::createUuid().toString();
+    {auto db=QSqlDatabase::addDatabase("QSQLITE",name);db.setDatabaseName(path);if(!db.open())throw std::runtime_error("fixture sqlite");action(db);db.close();}
+    QSqlDatabase::removeDatabase(name);
+}
+void oldQt(QString path){
+    editSql(path,[](QSqlDatabase &db){QSqlQuery q(db);QVERIFY(q.exec("UPDATE metadata SET value='qt-json-v1' WHERE key='payload_format'"));
+        QVERIFY(q.exec("SELECT source_key,payload FROM sources"));QList<QPair<QString,QByteArray>> rows;
+        while(q.next())rows.append({q.value(0).toString(),q.value(1).toByteArray()});q.finish();
+        for(const auto &row:rows){QVERIFY(q.prepare("UPDATE sources SET payload=? WHERE source_key=?"));
+            q.addBindValue(QByteArray("MYDICT-QT-JSON1\n")+row.second.mid(13));q.addBindValue(row.first);QVERIFY(q.exec());}
+        QVERIFY(q.exec("PRAGMA wal_checkpoint(TRUNCATE)"));});
+}
+void binaryCs(QString path){
+    QDir().mkpath(QFileInfo(path).absolutePath());editSql(path,[](QSqlDatabase &db){QSqlQuery q(db);
+        QVERIFY(q.exec("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)"));
+        QVERIFY(q.exec("INSERT INTO metadata VALUES('username','sync-test'),('schema','1')"));
+        QVERIFY(q.exec("CREATE TABLE sources(payload BLOB)"));QVERIFY(q.exec("INSERT INTO sources VALUES(x'1f8b0800')"));});
+}
+void commitSeed(QString directory){
+    git(directory,{"config","user.name","Sync fixture"});git(directory,{"config","user.email","test@example.invalid"});
+    git(directory,{"add","--","users","qt-users"});git(directory,{"-c","commit.gpgsign=false","commit","-m","legacy fixture"});git(directory,{"push","origin","HEAD:main"});
+}
 struct EnvironmentGuard {
     QByteArray name,old;bool existed;
     EnvironmentGuard(QByteArray key,QByteArray value):name(key),old(qgetenv(key.constData())),existed(qEnvironmentVariableIsSet(key.constData())){qputenv(name.constData(),value);}
@@ -88,7 +115,7 @@ private slots:
         CacheSync::run(aDir,ac,a.path(),"sync-test");CacheSync::run(bDir,bc,b.path(),"sync-test",true);
         QVERIFY(b.find("go","en|zh-CN").isEmpty());
         const auto tree=git(repo,{"ls-tree","-r","--name-only","main"});
-        QVERIFY(tree.contains("qt-users/sync-test/"));QCOMPARE(tree.split('\n').size(),2);QVERIFY(!tree.contains(".json"));
+        QVERIFY(tree.contains("users/sync-test/shared/qt-"));QCOMPARE(tree.split('\n').size(),2);QVERIFY(!tree.contains(".json"));QVERIFY(!tree.contains("qt-users/"));
     }
     void dirtyTrackedFileSurvivesRemotePull(){
         QTemporaryDir temp;const auto repo=temp.filePath("remote.git");git(temp.path(),{"init","--bare","--initial-branch=main",repo});
@@ -114,6 +141,36 @@ private slots:
         QVERIFY_EXCEPTION_THROWN(CacheSync::run(temp.path(),config(repo,"a"),db.path(),"sync-test"),std::runtime_error);
         QVERIFY_EXCEPTION_THROWN(CacheSync::run(temp.path(),config("https://example.invalid/repo","a"),db.path(),"sync-test"),std::runtime_error);
         QVERIFY(!db.find("go","en|zh-CN").isEmpty());
+    }
+    void sharedAndLegacySnapshotsMergeWithoutTouchingBinaryFiles(){
+        QTemporaryDir temp;const auto repo=temp.filePath("remote.git"),seed=temp.filePath("seed");git(temp.path(),{"init","--bare","--initial-branch=main",repo});git(temp.path(),{"clone",repo,seed});
+        const auto qtPath=QDir(seed).filePath("qt-users/sync-test/legacy.sqlite");Database qt(qtPath,"sync-test");qt.initialize();qt.store(entry("old-qt","old Qt"),false);qt.setFavorite("old-qt","en|zh-CN",true);oldQt(qtPath);
+        Database cs(QDir(seed).filePath("users/sync-test/shared/cs-fixture.sqlite"),"sync-test");cs.initialize();cs.store(entry("from-csharp","shared C#"),false);
+        Database top(QDir(seed).filePath("users/sync-test/old-json.sqlite"),"sync-test");top.initialize();top.store(entry("old-json","old JSON"),false);
+        binaryCs(QDir(seed).filePath("users/sync-test/old-binary.sqlite"));commitSeed(seed);
+        const auto before=git(repo,{"rev-parse","main:users/sync-test/old-binary.sqlite"});
+        const auto local=temp.filePath("local");QDir().mkpath(local);Database db(QDir(local).filePath("words-shared.sqlite"),"sync-test");db.initialize();
+        auto settings=config(repo,"a");const auto message=CacheSync::run(local,settings,db.path(),"sync-test",true);
+        QVERIFY(!message.contains(QString::fromUtf8("旧 C#")));QCOMPARE(db.page({},false,0).total,3);QVERIFY(db.isFavorite("old-qt","en|zh-CN"));
+        QCOMPARE(db.find("from-csharp","en|zh-CN")["Summary"].toString(),QString("shared C#"));
+        const auto revision=db.revision();CacheSync::run(local,settings,db.path(),"sync-test",true);QCOMPARE(db.revision(),revision);
+        db.store(entry("local-only","own shard restore"),false);CacheSync::run(local,settings,db.path(),"sync-test");
+        QCOMPARE(git(repo,{"rev-parse","main:users/sync-test/old-binary.sqlite"}),before);
+        const auto tree=git(repo,{"ls-tree","-r","--name-only","main"});QVERIFY(tree.contains("users/sync-test/shared/qt-"));QVERIFY(tree.contains("users/sync-test/shared/cs-fixture.sqlite"));QVERIFY(tree.contains("qt-users/sync-test/legacy.sqlite"));
+        // A newly created local database with the same device seed must restore
+        // its own uploaded shard rather than skipping it as an existing backup.
+        QFile::remove(db.path());QFile::remove(db.path()+"-wal");QFile::remove(db.path()+"-shm");db.initialize();
+        CacheSync::run(local,settings,db.path(),"sync-test",true);QCOMPARE(db.page({},false,0).total,4);
+    }
+    void binaryOnlyRepositoryExplainsCSharpUpgradeAndKeepsOriginal(){
+        QTemporaryDir temp;const auto repo=temp.filePath("remote.git"),seed=temp.filePath("seed");git(temp.path(),{"init","--bare","--initial-branch=main",repo});git(temp.path(),{"clone",repo,seed});
+        binaryCs(QDir(seed).filePath("users/sync-test/old-binary.sqlite"));QDir().mkpath(QDir(seed).filePath("qt-users"));
+        git(seed,{"config","user.name","Sync fixture"});git(seed,{"config","user.email","test@example.invalid"});git(seed,{"add","users"});git(seed,{"-c","commit.gpgsign=false","commit","-m","binary fixture"});git(seed,{"push","origin","HEAD:main"});
+        const auto before=git(repo,{"rev-parse","main:users/sync-test/old-binary.sqlite"});
+        const auto local=temp.filePath("local");QDir().mkpath(local);Database db(QDir(local).filePath("words-shared.sqlite"),"sync-test");db.initialize();auto settings=config(repo,"a");
+        auto note=CacheSync::run(local,settings,db.path(),"sync-test",true);QVERIFY(note.contains(QString::fromUtf8("新版 C#")));QCOMPARE(db.page({},false,0).total,0);
+        CacheSync::run(local,settings,db.path(),"sync-test");QCOMPARE(git(repo,{"rev-parse","main:users/sync-test/old-binary.sqlite"}),before);
+        QVERIFY(git(repo,{"ls-tree","-r","--name-only","main"}).contains("users/sync-test/shared/qt-"));
     }
 };
 int main(int argc,char **argv){

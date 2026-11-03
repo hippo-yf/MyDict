@@ -345,7 +345,7 @@ def main():
     machine=platform.machine().lower()
     arch='arm64' if machine in ('arm64','aarch64') else 'x64'
     osname={'win32':'windows','darwin':'macos'}.get(sys.platform,'linux')
-    name=f'MyDictQt-v1.5.1-{osname}-{arch}'
+    name=f'MyDictQt-v1.5.1-shared-{osname}-{arch}'
     stage=args.output/name
     if stage.exists():
         raise RuntimeError(f'Package directory already exists; use a new output directory: {stage}')

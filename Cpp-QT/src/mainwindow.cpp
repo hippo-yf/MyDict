@@ -168,7 +168,7 @@ void MainWindow::createUi() {
     connect(maximize, &QPushButton::clicked, this, [this] { isMaximized() ? showNormal() : showMaximized(); });
     connect(close, &QPushButton::clicked, this, &QWidget::close);
     connect(about, &QPushButton::clicked, this, [this] {
-        QMessageBox box(QMessageBox::Information, QStringLiteral("关于拾词"), QStringLiteral("拾词 MyDict\n版本 1.5.1 · C++ / Qt\n作者 Yance Feng & Codex\n\n中英互译、逐义解释与单词本\nMIT License\nQt 为动态链接库，许可见 QT-NOTICES.md"), QMessageBox::Ok, this);
+        QMessageBox box(QMessageBox::Information, QStringLiteral("关于拾词"), QStringLiteral("拾词 MyDict\n版本 ")+QStringLiteral(MYDICT_VERSION)+QStringLiteral(" · C++ / Qt\n作者 Yance Feng & Codex\n\n中英互译、跨平台共享单词本\nMIT License\nQt 为动态链接库，许可见 QT-NOTICES.md"), QMessageBox::Ok, this);
         box.setIconPixmap(windowIcon().pixmap(64,64)); box.exec();
     });
     layout->addWidget(titleBar);
@@ -193,7 +193,7 @@ void MainWindow::createUi() {
     filter = new QLineEdit; filter->setObjectName("bookFilter"); filter->setPlaceholderText(QStringLiteral("筛选单词或释义")); filter->setClearButtonEnabled(true); filter->setMinimumHeight(32); bookBar->addWidget(filter,1);
     favoritesOnly = new QCheckBox(QStringLiteral("仅收藏")); favoritesOnly->setObjectName("favoritesOnly"); bookBar->addWidget(favoritesOnly);
     auto *exportButton = new QPushButton(QStringLiteral("导出")); exportButton->setObjectName("exportButton"); bookBar->addWidget(exportButton);
-    auto *more = new QPushButton(QStringLiteral("⋯")); more->setObjectName("bookMore"); more->setFixedWidth(30); auto *menu = new QMenu(more); menu->addAction(QStringLiteral("导入 C# 迁移文件…"), this, &MainWindow::importBook); more->setMenu(menu); bookBar->addWidget(more);
+    auto *more = new QPushButton(QStringLiteral("⋯")); more->setObjectName("bookMore"); more->setFixedWidth(30); auto *menu = new QMenu(more); menu->addAction(QStringLiteral("导入词库文件…"), this, &MainWindow::importBook); more->setMenu(menu); bookBar->addWidget(more);
     bookLayout->addLayout(bookBar);
     book = new QListWidget; book->setObjectName("wordbook"); book->setSpacing(1); book->setUniformItemSizes(false); book->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); book->setFrameShape(QFrame::NoFrame); bookLayout->addWidget(book,1);
     emptyBook = new QLabel(QStringLiteral("暂无单词"), book); emptyBook->setObjectName("emptyBook"); emptyBook->setAlignment(Qt::AlignCenter); emptyBook->setAttribute(Qt::WA_TransparentForMouseEvents); emptyBook->hide();
@@ -489,7 +489,7 @@ void MainWindow::exportBook(){
     background(this,[db,path,search,only]{db.exportCsv(path,search,only);return true;},[this](bool){toast(QStringLiteral("已导出单词本"));},[this](QString e){toast(e,true);});
 }
 void MainWindow::importBook(){
-    if(!initialized||pendingClose)return;QString path=QFileDialog::getOpenFileName(this,QStringLiteral("导入 C# 词库导出文件"),QDir::homePath(),QStringLiteral("MyDict 迁移文件 (*.ndjson *.jsonl);;所有文件 (*)"));if(path.isEmpty())return;auto db=database;++pendingWrites;
+    if(!initialized||pendingClose)return;QString path=QFileDialog::getOpenFileName(this,QStringLiteral("导入词库导出文件"),QDir::homePath(),QStringLiteral("MyDict 迁移文件 (*.ndjson *.jsonl);;所有文件 (*)"));if(path.isEmpty())return;auto db=database;++pendingWrites;
     background(this,[db,path]()mutable{db.importEntries(path);return true;},[this](bool){writeFinished();dirty();toast(QStringLiteral("导入完成"));refreshBook();updateHistory();},[this](QString e){writeFinished();toast(e,true);refreshBook();});
 }
 void MainWindow::setStyle(const QString &key,double value){

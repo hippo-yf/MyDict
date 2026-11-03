@@ -10,6 +10,10 @@ C# / WPF 中英词典，使用 VS2022 和 .NET Framework 4.8 编译。当前固�
 
 C++ / Qt 跨平台版本见 [Cpp-QT](Cpp-QT/README.md)，使用 Conda、CMake 和平台原生编译器，另有 Windows、macOS、Linux 自动构建。
 
+当前开发分支还提供 **C# 与 Qt 公共缓存版**：使用同一 `username` 和 Gitee 仓库即可共享释义、收藏与删除状态，协议为 `mydict-json-v1`，本地库为 `words-shared.sqlite`。固定发布标签 `v1.5.1` 不变；它不具备公共协议，需要升级客户端。
+
+使用 VS2022 执行 `tools/Build-SharedCache.ps1 -Test`，C# 共享版输出到 `bin/Shared`。可运行 `bin/Shared/SharedCacheMaintenance.exe 原settings.json路径 --data-dir bin/Shared --sync`，只读导入原词库并发布公共快照；原文件保留。完整配置及升级步骤见 [跨平台共享词库说明](Cpp-QT/docs/SHARED_WORDBOOK.md)。
+
 ## 界面预览
 
 | 查词 | 单词本 |

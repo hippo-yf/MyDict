@@ -37,7 +37,7 @@ class WordbookImportTests
    Func<string,string,string[]> arguments=(force,dry)=>new[]{input,settings,"0","0","0",force,dry};
    Check(WordbookImport.Main(arguments("false","true"))==0&&fake.Calls==0&&!Directory.Exists(Path.Combine(folder,"profiles")),"Dry run wrote files or called API");
    Check(WordbookImport.Main(arguments("false","false"))==0&&fake.Calls==27,"Initial sequential import failed");
-   string profile=Path.Combine(folder,"profiles","import-test");var cache=new WordDatabase(Path.Combine(profile,"words.sqlite"),"import-test");cache.Open();
+    string profile=Path.Combine(folder,"profiles","import-test");var cache=WordDatabase.OpenShared(profile,"import-test");
    Check(cache.Page("",false,0).Total==27&&cache.Page("",false,0).Favorites==27&&cache.History().Current==null,"Cache/favorites/history incorrect");
    Check(cache.PendingSync,"Sync pending marker missing");
    Check(WordbookImport.Main(arguments("false","false"))==0&&fake.Calls==27,"Resume made duplicate API calls");
