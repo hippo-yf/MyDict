@@ -4,6 +4,12 @@ C# / WPF 中英词典，使用 VS2022 和 .NET Framework 4.8 编译。当前固�
 
 源码：[Gitee hippo-yf/MyDict](https://gitee.com/hippo-yf/MyDict)。本地便携包为 `release/MyDict-v1.5.1-win-x64.zip`，校验值位于 `release/SHA256SUMS.txt`。
 
+## 界面预览
+
+| 查词 | 单词本 |
+| :---: | :---: |
+| ![查词页面：逐义中英文释义、音标、词形、搭配及例句](screenshots/main.jpg) | ![单词本页面：词义摘要、来源图标与收藏管理](screenshots/words.jpg) |
+
 ## 查词与单词本
 
 - 输入停顿后查询普通在线来源；DeepSeek 使用鲸鱼开关启用，点击查询、输入框回车或点击释义中的其他英文单词触发查询。开关显示短提示；已有 DeepSeek 释义时，再次联网查询前需要确认。
