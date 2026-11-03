@@ -2,6 +2,14 @@
 
 以 C# / WPF **1.5.1** 为功能基线的 Qt Widgets 版本，C++17、Qt 6、CMake、Conda。作者 **Yance Feng & Codex**，应用源码 MIT 许可。保留逐义双语释义、DeepSeek、收藏/查询统一 SQLite、历史、分页、字体样式热更新、导入和 Gitee 同步。
 
+## 界面预览
+
+以下为 Qt 版合成测试词条的真实窗口截图，不含个人词库。
+
+| 查词 | 单词本 |
+| :---: | :---: |
+| ![Qt 查词页面](screenshots/qt-main.png) | ![Qt 单词本页面](screenshots/qt-words.png) |
+
 ## 编译和程序
 
 | 平台 | 架构 | 本次验证 |
