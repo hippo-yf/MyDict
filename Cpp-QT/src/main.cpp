@@ -10,6 +10,15 @@
 #include <stdexcept>
 
 int main(int argc,char **argv) {
+#ifdef Q_OS_WIN
+    // DirectWrite's font database has a large cold-start allocation on some
+    // Windows installations. FreeType supports our CJK/IPA/variable fonts with
+    // a much smaller footprint. Respect an explicitly configured platform or
+    // font engine; Qt's -platform command-line option also overrides this default.
+    const auto platform=qgetenv("QT_QPA_PLATFORM");
+    if(platform.isEmpty()||platform=="windows")
+        qputenv("QT_QPA_PLATFORM","windows:fontengine=freetype");
+#endif
 #if QT_VERSION < QT_VERSION_CHECK(6,0,0)
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);

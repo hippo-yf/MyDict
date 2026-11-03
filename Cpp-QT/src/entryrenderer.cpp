@@ -8,6 +8,9 @@
 #include <QRegularExpression>
 #include <QTextCursor>
 #include <QTextCharFormat>
+#include <QTextBlock>
+#include <QTextFragment>
+#include <QHash>
 #include <QUrl>
 #include <QColor>
 #include <QSet>
@@ -228,6 +231,25 @@ EntryBrowser::EntryBrowser(QWidget *parent) : QTextBrowser(parent) {
     setOpenLinks(false); setOpenExternalLinks(false); setMouseTracking(true); viewport()->setMouseTracking(true);
     setTextInteractionFlags(Qt::TextBrowserInteraction);
     setFrameShape(QFrame::NoFrame);
+}
+void EntryBrowser::setHtml(const QString &html) {
+    QTextBrowser::setHtml(html);
+    struct Change {int position,length;QString style;};
+    QList<Change> changes;QHash<QString,QString> styles;
+    for(auto block=document()->begin();block.isValid();block=block.next())for(auto it=block.begin();!it.atEnd();++it){
+        const auto fragment=it.fragment();if(!fragment.isValid())continue;
+        const auto font=fragment.charFormat().font().resolve(document()->defaultFont());
+        if(!font.bold()||!font.italic()||!font.styleName().isEmpty())continue;
+        const auto key=font.families().join('\n')+":"+QString::number(font.weight())+":"+QString::number(font.stretch());
+        if(!styles.contains(key))styles.insert(key,AppFonts::styledFont(font).styleName());
+        if(!styles.value(key).isEmpty())changes.append({fragment.position(),fragment.length(),styles.value(key)});
+    }
+    QTextCursor cursor(document());cursor.beginEditBlock();
+    for(const auto &change:changes){
+        cursor.setPosition(change.position);cursor.setPosition(change.position+change.length,QTextCursor::KeepAnchor);
+        QTextCharFormat format;format.setFontStyleName(change.style);cursor.mergeCharFormat(format);
+    }
+    cursor.endEditBlock();
 }
 void EntryBrowser::mouseMoveEvent(QMouseEvent *event) {
     QTextBrowser::mouseMoveEvent(event);

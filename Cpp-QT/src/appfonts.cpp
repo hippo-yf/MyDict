@@ -8,6 +8,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QGuiApplication>
 #include <QHash>
 #include <QThread>
@@ -50,6 +51,7 @@ struct Reader {
 struct Name {QString text;int priority=0;};
 struct Face {
     QSet<QString> aliases;
+    QSet<QString> styles;
     QList<Name> names;
 };
 struct Font {
@@ -123,11 +125,14 @@ Face readFace(Reader &reader,quint32 offset) {
     const auto records=reader.read(tableOffset+6,qint64(names)*12);if(records.size()!=names*12)return result;
     for(int i=0;i<names;++i){
         int at=i*12,platform=u16(records,at),encoding=u16(records,at+2),language=u16(records,at+4),id=u16(records,at+6);
-        if(id!=1&&id!=16&&id!=21)continue;
+        const bool familyName=id==1||id==16||id==21;
+        const bool styleName=id==2||id==17||id==22;
+        if(!familyName&&!styleName)continue;
         qint64 length=u16(records,at+8),relative=qint64(strings)+u16(records,at+10);
         if(length==0||relative>tableLength||length>tableLength-relative)continue;
         const auto bytes=reader.read(tableOffset+relative,length);if(bytes.size()!=length)continue;
         const auto name=decodeName(bytes,platform,encoding);if(name.isEmpty())continue;
+        if(styleName){result.styles.insert(name);continue;}
         const auto key=familyKey(name);result.aliases.insert(key);
         // Typographic/WWS names describe the family shared by all weights.
         int priority=(id==16?0:id==21?1:2)*100;
@@ -260,6 +265,40 @@ void AppFonts::apply(const QSet<QString> &requiredFamilies,const QStringList &fo
     }
 }
 QString AppFonts::resolve(QString family){return state().resolved.value(familyKey(family),family);}
+QFont AppFonts::styledFont(QFont font) {
+    if(!font.bold()||!font.italic()||!font.styleName().isEmpty())return font;
+    QSet<QString> localStyles;
+    for(const auto &loaded:state().loaded)for(const auto &face:loaded.font.faces)
+        if(face.aliases.contains(familyKey(font.family())))localStyles.unite(face.styles);
+    if(localStyles.isEmpty())return font;
+    // Query only the actual family being displayed. Installed older versions
+    // can advertise e.g. Semibold Italic as weight 700, so prefer an exact style
+    // supplied by the selected local files rather than a same-weight impostor.
+    const auto family=QFontInfo(font).family();
+    QString best;int bestScore=1000000;
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+    const auto styles=QFontDatabase::styles(family);
+#else
+    const QFontDatabase database;
+    const auto styles=database.styles(family);
+#endif
+    for(const auto &style:styles){
+        if(!localStyles.contains(style))continue;
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+        const int weight=QFontDatabase::weight(family,style);
+        if(!QFontDatabase::italic(family,style)||weight<=QFont::Medium)continue;
+        const auto candidate=QFontDatabase::font(family,style,12);
+#else
+        const int weight=database.weight(family,style);
+        if(!database.italic(family,style)||weight<=QFont::Medium)continue;
+        const auto candidate=database.font(family,style,12);
+#endif
+        const int score=qAbs(weight-int(font.weight()))*1000+qAbs(candidate.stretch()-font.stretch());
+        if(score<bestScore){best=style;bestScore=score;}
+    }
+    if(!best.isEmpty())font.setStyleName(best);
+    return font;
+}
 QStringList AppFonts::loadedFiles(){QStringList files;for(const auto &loaded:state().loaded)files.append(loaded.font.path);files.sort(Qt::CaseInsensitive);return files;}
 QStringList AppFonts::availableFamilies(){return state().available;}
 

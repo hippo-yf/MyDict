@@ -75,6 +75,14 @@ Windows 的 `CMAKE_PREFIX_PATH` 使用 Conda 环境下的 `Library`，生成器�
 - Ctrl+加号/减号调整解释与单词本字号，Ctrl+[ / ] 调整行距。设置保存到 `settings.json`，外部修改后热更新。字体优先从 `fonts/` 按名称匹配，再由系统匹配。
 
 字体目录只索引 OpenType 名称元数据，不会注册全部附带字体。Qt 仅注册当前界面、正文、英文词头所需的本地字体族及其粗体、斜体变体；当前词条有音标时才加入音标字体。修改字体设置或切换词条后重新计算所需字体，取消不再使用的本地字体注册。仅当界面或正文经过系统回退仍缺少常用中文字形时，才加载附带的 Noto Sans SC。未被使用的 Nerd Font、Noto、其他 `fonts/` 文件和 C# 专用字体设置均不会导致提前加载。此策略不改变 Qt 的系统字体渲染后端。
+
+Windows 版默认使用 FreeType 字体后端，避免部分系统上 DirectWrite 字体数据库初始化造成数百 MB 的额外占用，同时支持音标、中文、粗斜体和可变字体。解释区优先使用本地字体中实际提供的粗斜体，避免系统里同名旧字体的合成样式干扰。macOS/Linux 继续使用各自的默认后端。排查显示差异时可运行 `MyDictQt.exe -platform windows:fontengine=directwrite` 或 `MyDictQt.exe -platform windows:fontengine=gdi`；显式的 `QT_QPA_PLATFORM` 平台参数也会保留（裸 `windows` 使用本程序的 FreeType 默认值）。设置在创建窗口前生效，不需要修改个人 `settings.json`。
+
+Windows 自动测试额外通过真实窗口验证 1x/1.5x 额外缩放下的字形与字体热更新，报告记录包含系统缩放在内的实际 DPR。打包测试同时验证原生窗口启动，记录私有内存和工作集，并以 384 MB 私有内存上限防止启动占用回退；该上限是回归保护，不是通常的运行占用。实测值仍取决于系统字体、词条与显示缩放。
+
+Windows 本机可运行 `./tools/Measure-Memory.ps1 -QtPrefix <Conda环境目录> -CompareDirectWrite`，在独立测试目录对照默认后端与 DirectWrite。可另加 `-DataSnapshot <words-shared.sqlite路径> -Username <该词库身份>` 测量已有词库；脚本通过 SQLite 只读备份创建副本，关闭网络功能，保存采样报告并退出所有测试窗口，不改动原词库。
+
+2026-11-04 同机、同一 Release 构建和全部附带字体的 20 秒启动对照：空词库的私有内存由 DirectWrite 的 618.8 MB 降至默认后端的 42.4 MB；5929 词 SQLite 副本由 612.5 MB 降至 42.6 MB，工作集约 77.7 MB。这里只恢复启动时所需内容，不预载完整词库；后续渲染和操作的占用会随当前内容变化。
 - 在线 HTTP 及解析在独立 QThread；SQLite、分页、迁移、导出和同步在后台执行。启动先显示界面，完整释义按需载入。
 
 ## 设置和数据目录

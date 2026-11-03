@@ -15,6 +15,8 @@ class EntryBrowser : public QTextBrowser {
     Q_OBJECT
 public:
     explicit EntryBrowser(QWidget *parent = nullptr);
+public slots:
+    void setHtml(const QString &html);
 protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void leaveEvent(QEvent *event) override;
