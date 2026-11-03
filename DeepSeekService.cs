@@ -129,7 +129,7 @@ namespace MyDict
    }
    object forms;if(data.TryGetValue("forms",out forms)&&forms!=null)try{record.Forms=serializer.Deserialize<WordForms>(serializer.Serialize(forms))??new WordForms();}catch(ArgumentException){throw new InvalidOperationException("DeepSeek 词形数据格式无效。");}
    var now=DateTime.UtcNow;
-   return new Entry{Word=input,Pair=Translator.DetectPair(input),Translation=translation,Summary=string.IsNullOrWhiteSpace(Text(data,"summary"))?translation:Text(data,"summary"),Record=record,Details=record.Format(),SavedAt=DateTime.Now.ToString("yyyy-MM-dd HH:mm"),TranslationProvider="DeepSeek",TranslationUrl="https://api-docs.deepseek.com/",LookupSource="DeepSeek",LookupModel=options.Model,QueryEndpoint=options.Endpoint,QueriedAtUtc=now.ToString("o")};
+   return new Entry{Word=input,Pair=Translator.DetectPair(input),Translation=translation,Summary=string.IsNullOrWhiteSpace(Text(data,"summary"))?translation:Text(data,"summary"),Record=record,Details=record.Format(),SavedAt=DateTime.Now.ToString("yyyy-MM-dd HH:mm"),TranslationProvider="DeepSeek",TranslationUrl="https://api-docs.deepseek.com/",LookupSource="DeepSeek",LookupModel=options.Model,QueryEndpoint=options.Endpoint,QueriedAtUtc=now.ToString("o"),SuccessfulQueryAtUtc=now.ToString("o")};
   }
  }
  public static class LookupSources

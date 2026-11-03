@@ -21,6 +21,12 @@ class CacheTests
    Check(loaded.Current.Word=="go"&&loaded.Move(-1).Word=="bank","Restart history failed");
    Check(loaded.Find(a).Translation=="中文","Cached result lost");
    s.Provider="LibreTranslate";Check(a!=LookupCache.Key("bank","en|zh-CN",s),"Providers share cache key");
+   var fresh=Entry("bank");fresh.SuccessfulQueryAtUtc="2026-11-02T05:00:00Z";fresh.Translation="new";c.Record(a,fresh);
+   var stale=Entry("bank");stale.SuccessfulQueryAtUtc="2026-11-02T12:00:00+08:00";stale.Translation="old";c.Record(a,stale);
+   Check(c.Find(a).Translation=="new","Older success overwrote a newer result, or timestamps were compared as strings");
+   var oldAi=Entry("bank");oldAi.LookupSource="DeepSeek";oldAi.QueriedAtUtc="2026-11-02T03:00:00Z";c.Store(LookupCache.KeyForEntry(oldAi),oldAi);
+   Check(c.FindPreferred("bank","en|zh-CN",new AppSettings()).Translation=="new","Older AI result hid newer successful query");
+   c.Save();var timestampReload=new LookupCache(path);timestampReload.Load();Check(timestampReload.Find(a).SuccessfulQueryAtUtc==fresh.SuccessfulQueryAtUtc,"Success timestamp not persisted");
    File.WriteAllText(path,"{bad json");bool rejected=false;try{new LookupCache(path).Load();}catch{rejected=true;}
    Check(rejected&&File.ReadAllText(path)=="{bad json","Corrupt cache overwritten");
    Console.WriteLine("PASS: normalization, result cache, back/forward, branch truncation, retained cache, restart cursor, provider isolation, corrupt cache protection");return 0;

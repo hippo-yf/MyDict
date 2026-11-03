@@ -187,7 +187,25 @@ namespace MyDict
                 foreach(var source in record.Sources.Distinct()){var match=Regex.Match(source,@"https?://\S+");if(match.Success)Link(doc,source,match.Value);}
                 }
             }
-            Link(doc,(entry.TranslationProvider??"MyMemory")+" · 参考翻译",entry.TranslationUrl??"https://mymemory.translated.net/"); return doc;
+            Link(doc,(entry.TranslationProvider??"MyMemory")+" · 参考翻译",entry.TranslationUrl??"https://mymemory.translated.net/");
+            RemoveCurrentWordLinks(doc,entry.Word); return doc;
+        }
+        private static void RemoveCurrentWordLinks(FlowDocument doc,string currentWord)
+        {
+            string word=(currentWord??"").Trim().Normalize().Replace('’','\'');
+            var links=new System.Collections.Generic.List<Hyperlink>();
+            for(var position=doc.ContentStart;position!=null&&position.CompareTo(doc.ContentEnd)<0;position=position.GetNextContextPosition(LogicalDirection.Forward))
+                if(position.GetPointerContext(LogicalDirection.Forward)==TextPointerContext.ElementStart) {
+                    var link=position.GetAdjacentElement(LogicalDirection.Forward) as Hyperlink;
+                    if(link!=null&&link.NavigateUri==null&&string.Equals(new TextRange(link.ContentStart,link.ContentEnd).Text.Normalize().Replace('’','\''),word,StringComparison.OrdinalIgnoreCase))links.Add(link);
+                }
+            foreach(var link in links) {
+                var paragraph=link.Parent as Paragraph;var span=link.Parent as Span;
+                var inlines=paragraph!=null?paragraph.Inlines:span?.Inlines;
+                if(inlines==null)continue;
+                var text=new Run(new TextRange(link.ContentStart,link.ContentEnd).Text){Foreground=link.Foreground,TextDecorations=null};
+                inlines.InsertBefore(link,text);inlines.Remove(link);
+            }
         }
         public static void Refresh(RichTextBox view, Entry entry)
         {

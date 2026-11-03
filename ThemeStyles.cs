@@ -90,7 +90,7 @@ namespace MyDict
             {
                 case "number": double number=value=="Auto"?double.NaN:double.Parse(value,CultureInfo.InvariantCulture);if(double.IsInfinity(number)||number<0)throw new InvalidOperationException("尺寸须为非负有限值");if(key.Contains("opacity") && number>1)throw new InvalidOperationException("透明度须在 0–1 之间");if((key.Contains("size")||key.Contains("scale")||key.Contains("line_spacing"))&&(double.IsNaN(number)||number<=0))throw new InvalidOperationException("字号与缩放须大于 0");return number;
                 case "color":return (Color)ColorConverter.ConvertFromString(value);
-                case "font":if(string.IsNullOrWhiteSpace(value))throw new InvalidOperationException("字体不可为空");return new FontFamily(value);
+                case "font":if(string.IsNullOrWhiteSpace(value))throw new InvalidOperationException("字体不可为空");return AppFonts.Resolve(value);
                 case "weight":return new FontWeightConverter().ConvertFromInvariantString(value);
                 case "fontstyle":return new FontStyleConverter().ConvertFromInvariantString(value);
                 case "thickness":return new ThicknessConverter().ConvertFromInvariantString(value);

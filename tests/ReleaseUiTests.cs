@@ -1,49 +1,43 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Web.Script.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Documents;
+using System.Windows.Threading;
 using MyDict;
 class ReleaseUiTests
 {
- static BindingFlags Private=BindingFlags.Instance|BindingFlags.NonPublic;
- static void Check(bool condition,string message){if(!condition)throw new Exception(message);}
- static Entry Sample(string word){var r=new DictionaryRecord{Word=word};var m=new Meaning{PartOfSpeech="n. 名词"};m.Senses.Add(new Sense{Definition="bank and run.",Chinese="测试释义。"});r.Meanings.Add(m);return new Entry{Word=word,Translation="测试",Pair="en|zh-CN",Record=r};}
+ const BindingFlags Private=BindingFlags.Instance|BindingFlags.NonPublic;
  static object Field(object target,string name){return target.GetType().GetField(name,Private).GetValue(target);}
  static void Invoke(object target,string name,params object[] args){target.GetType().GetMethod(name,Private).Invoke(target,args);}
- static void LoadResources(App app)
+ static void Check(bool value,string message){if(!value)throw new Exception(message);}
+ static void Pump(Func<bool> condition,int seconds=10){var frame=new DispatcherFrame();var timer=new DispatcherTimer{Interval=TimeSpan.FromMilliseconds(10)};var deadline=DateTime.UtcNow.AddSeconds(seconds);timer.Tick+=(s,e)=>{if(condition()||DateTime.UtcNow>=deadline)frame.Continue=false;};timer.Start();Dispatcher.PushFrame(frame);timer.Stop();Check(condition(),"UI operation timed out");}
+ static void Resources(App app){var xml=new System.Xml.XmlDocument();xml.Load(Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","..","App.xaml")));string resource=xml.SelectSingleNode("//*[local-name()='Application.Resources']").InnerXml;app.Resources=(ResourceDictionary)System.Windows.Markup.XamlReader.Parse("<ResourceDictionary xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>"+resource+"</ResourceDictionary>");}
+ [STAThread]static int Main()
  {
-  var xml=new System.Xml.XmlDocument();xml.Load(Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","..","App.xaml")));
-  string resources=xml.SelectSingleNode("//*[local-name()='Application.Resources']").InnerXml;
-  app.Resources=(ResourceDictionary)System.Windows.Markup.XamlReader.Parse("<ResourceDictionary xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>"+resources+"</ResourceDictionary>");
- }
- [STAThread] static int Main()
- {
-  string folder=Path.Combine(Path.GetTempPath(),"mydict-release-"+Guid.NewGuid());Directory.CreateDirectory(folder);
-  var app=new App();LoadResources(app);app.ShutdownMode=ShutdownMode.OnExplicitShutdown;MainWindow window=null;
-  try{
-   string config=Path.Combine(folder,"settings.json"),cachePath=Path.Combine(folder,"lookup-cache.json");
-   typeof(SettingsStore).GetField("FilePath").SetValue(null,config);typeof(LookupCache).GetField("DefaultPath").SetValue(null,cachePath);SettingsStore.Save(new AppSettings());
-   var cache=new LookupCache(cachePath);cache.Record(LookupCache.Key("bank","en|zh-CN",new AppSettings()),Sample("bank"));cache.Record(LookupCache.Key("run","en|zh-CN",new AppSettings()),Sample("run"));cache.Save();
-   window=new MainWindow();var store=Field(window,"store");store.GetType().GetField("FilePath").SetValue(store,Path.Combine(folder,"favorites.json"));window.GetType().GetField("entries",Private).SetValue(window,new List<Entry>());Invoke(window,"RefreshList");window.Show();window.UpdateLayout();Check(window.Icon!=null,"App window icon missing");
-   var query=(TextBox)window.FindName("Query");Check(query.Text=="run","Startup history restore failed");
-   ((Button)window.FindName("BackButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Check(query.Text=="bank","Back failed");
-   ((Button)window.FindName("ForwardButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Check(query.Text=="run","Forward failed");
-   var view=(RichTextBox)window.FindName("ResultView");var link=view.Document.Blocks.OfType<Paragraph>().SelectMany(p=>p.Inlines.OfType<Hyperlink>()).First(l=>new TextRange(l.ContentStart,l.ContentEnd).Text=="bank");link.RaiseEvent(new RoutedEventArgs(Hyperlink.ClickEvent));Check(query.Text=="bank"&&Field(window,"request")==null,"Cached word click failed");
-   var book=(ListBox)window.FindName("FavoritesList");Check(book.Items.Count==2,"Book content missing");
-   var star=new Button{DataContext=book.Items.Cast<object>().First(r=>(string)r.GetType().GetProperty("Word").GetValue(r)=="bank")};Invoke(window,"BookStar_Click",star,new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Check(((List<Entry>)Field(window,"entries")).Count==1,"Favorite failed");
-   star.DataContext=book.Items.Cast<object>().First(r=>(string)r.GetType().GetProperty("Word").GetValue(r)=="bank");Invoke(window,"BookStar_Click",star,new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Check(((List<Entry>)Field(window,"entries")).Count==0,"Unfavorite failed");
-   var s=SettingsStore.Load();Check(s.Styles.Count>=300,"Grouped styles missing");s.Styles["number.doc.size.20"]="22";SettingsStore.Save(s);ThemeStyles.Reload();Check(ThemeStyles.Number("number.doc.size.20")==22,"Style reload failed");
-   s.Styles["number.doc.size.20"]="bad";SettingsStore.Save(s);bool rejected=false;try{ThemeStyles.Reload();}catch{rejected=true;}Check(rejected&&ThemeStyles.Number("number.doc.size.20")==22,"Invalid style corrupted theme");
-   s.Styles["number.doc.size.20"]="22";SettingsStore.Save(s);window.Close();window=null;var root=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(config));Check(root.ContainsKey("_说明")&&root.ContainsKey("Window")&&SettingsStore.Load().Styles["number.doc.size.20"]=="22","Window/config persistence failed");
-   Console.WriteLine("PASS: grouped config, UI startup, cache/history, word-click, favorite toggles, theme reload/error protection, window state");return 0;
-  }catch(Exception ex){Console.Error.WriteLine(ex);return 1;}
-  finally{if(window!=null)window.Close();app.Shutdown();foreach(string file in Directory.GetFiles(folder))File.Delete(file);Directory.Delete(folder);}
+  string folder=Path.Combine(Path.GetTempPath(),"mydict-sqlite-ui-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);var app=new App();Resources(app);app.ShutdownMode=ShutdownMode.OnExplicitShutdown;SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());MainWindow window=null;
+  try {
+   string settings=Path.Combine(folder,"settings.json");typeof(SettingsStore).GetField("FilePath").SetValue(null,settings);SettingsStore.Save(new AppSettings{username="ui-test",CacheSync=new CacheSyncOptions{Enabled=false}});
+   var data=new WordDatabase(Path.Combine(folder,"profiles","ui-test","words.sqlite"),"ui-test");data.Open();for(int i=0;i<125;i++)data.Save(new Entry{Word="word"+i,Pair="en|zh-CN",Translation="含义 "+i,TranslationProvider="MyMemory",SuccessfulQueryAtUtc="2026-11-03T00:00:00Z"},i%2==0);
+   window=new MainWindow();Check(Field(window,"database")==null,"Constructor loaded database before showing the window");window.Show();window.UpdateLayout();Check(window.Icon!=null,"Icon missing");
+   Pump(()=> (bool)Field(window,"databaseReady")&&((ListBox)window.FindName("FavoritesList")).Items.Count==50);
+   var database=(WordDatabase)Field(window,"database");Check(database.DecodedEntries==0,"Startup/book page decoded full vocabulary");var book=(ListBox)window.FindName("FavoritesList");
+   ((Button)window.FindName("BookNext")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Pump(()=>((TextBlock)window.FindName("BookPageLabel")).Text.StartsWith("2 /"));Check(book.Items.Count==50&&database.DecodedEntries==0,"Paging accumulated vocabulary/details");
+   ((Button)window.FindName("BookNext")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Pump(()=>book.Items.Count==25);Check(database.DecodedEntries==0,"Last page decoded detail records");
+   ((TextBox)window.FindName("Filter")).Text="word124";Pump(()=>book.Items.Count==1);var row=(MainWindow.BookRow)book.Items[0];Check(row.Word=="word124","Filter incorrect");
+   var fakeStar=new Button{DataContext=row};Invoke(window,"BookStar_Click",fakeStar,new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Pump(()=>book.Items.Count==1&&!((MainWindow.BookRow)book.Items[0]).IsFavorite);
+   Check(database.DecodedEntries==0,"Favorite toggle loaded detail records");
+   book.SelectedIndex=0;Pump(()=>((TextBox)window.FindName("Query")).Text=="word124");Check(database.DecodedEntries<=2,"Selecting one word loaded many records");
+   ((TextBox)window.FindName("Filter")).Text="";Pump(()=>book.Items.Count==50);Check(database.DecodedEntries<=2,"Resetting filter decoded details");
+   var pending=new TaskCompletionSource<bool>();window.GetType().GetField("exchangeDatabase",Private).SetValue(window,new Func<WordDatabase,bool,Task>((db,upload)=>pending.Task));Invoke(window,"Sync_Click",null,new RoutedEventArgs());
+   ((TextBox)window.FindName("Filter")).Text="word123";Pump(()=>book.Items.Count==1);Check(window.IsEnabled,"Sync disabled the window");pending.SetResult(true);Pump(()=>!(bool)Field(window,"syncBusy"));
+   bool closed=false;window.Closed+=(s,e)=>closed=true;window.Close();Pump(()=>closed);window=null;
+   Console.WriteLine("PASS: shell before database, 50-row pages, no detail decoding for startup/filter/favorites, on-demand selection, responsive sync, quick close");return 0;
+  }catch(Exception ex){if(window!=null)Console.Error.WriteLine("UI state: "+((TextBlock)window.FindName("StateIcon")).ToolTip+"; ready="+Field(window,"databaseReady")+"; count="+((ListBox)window.FindName("FavoritesList")).Items.Count);Console.Error.WriteLine(ex);return 1;}
+  finally{if(window!=null)window.Close();app.Shutdown();Directory.Delete(folder,true);}
  }
 }
-
-

@@ -30,6 +30,7 @@ namespace MyDict
         public string LookupModel { get; set; }
         public string QueryEndpoint { get; set; }
         public string QueriedAtUtc { get; set; }
+        public string SuccessfulQueryAtUtc { get; set; }
     }
     public static class Translator
     {
@@ -75,19 +76,47 @@ namespace MyDict
     public class FavoriteStore
     {
         public readonly string FilePath;
-        public FavoriteStore(string path = null) { FilePath = path ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MyDict", "favorites.json"); }
+        private FavoriteData data = new FavoriteData();
+        public FavoriteStore(string path = null, string username = null) { FilePath = path ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MyDict", "favorites.json"); data.username = username; }
+        public FavoriteData Snapshot() { return JsonFiles.Serializer().Deserialize<FavoriteData>(JsonFiles.Serializer().Serialize(data)); }
+        public List<Entry> Entries { get { return data.Changes.Values.Where(c => !c.Deleted).OrderByDescending(c => c.UpdatedAtUtc).Select(c => c.Entry).ToList(); } }
+        public void Merge(FavoriteData other) { CacheMerge.MergeFavorites(data, other); }
         public List<Entry> Load()
         {
             if (!File.Exists(FilePath)) return new List<Entry>();
-            return (new JavaScriptSerializer().Deserialize<List<Entry>>(File.ReadAllText(FilePath, Encoding.UTF8)) ?? new List<Entry>()).Where(e => e != null && !string.IsNullOrWhiteSpace(e.Word) && !string.IsNullOrWhiteSpace(e.Translation)).ToList();
+            var text = File.ReadAllText(FilePath, Encoding.UTF8);
+            if (text.TrimStart().StartsWith("[")) {
+                var legacy = JsonFiles.Serializer().Deserialize<List<Entry>>(text);
+                if (legacy == null) throw new InvalidOperationException("收藏结构无效。");
+                foreach (var entry in legacy.Where(e => e != null && !string.IsNullOrWhiteSpace(e.Word))) data.Changes[CacheMerge.FavoriteKey(entry)] = new FavoriteChange { Entry = entry, UpdatedAtUtc = "1970-01-01T00:00:00.0000000Z" };
+            } else {
+                var loaded = JsonFiles.Serializer().Deserialize<FavoriteData>(text);
+                if (loaded == null || loaded.Changes == null || loaded.Changes.Values.Any(c => c == null || c.Entry == null || string.IsNullOrWhiteSpace(c.Entry.Word))) throw new InvalidOperationException("收藏结构无效。");
+                if (!string.IsNullOrEmpty(data.username) && !string.IsNullOrEmpty(loaded.username) && loaded.username != data.username) throw new InvalidOperationException("收藏 username 不匹配，已保护原文件。");
+                loaded.username = data.username ?? loaded.username; data = loaded;
+            }
+            return Entries;
+        }
+        public void Update(List<Entry> entries)
+        {
+            var serializer = JsonFiles.Serializer();
+            var desired = entries.ToDictionary(CacheMerge.FavoriteKey, e => e);
+            foreach (var pair in data.Changes.ToList()) if (!pair.Value.Deleted && !desired.ContainsKey(pair.Key)) Change(pair.Key, pair.Value.Entry, true);
+            foreach (var pair in desired) {
+                FavoriteChange old;
+                if (!data.Changes.TryGetValue(pair.Key, out old) || old.Deleted || serializer.Serialize(old.Entry) != serializer.Serialize(pair.Value)) Change(pair.Key, serializer.Deserialize<Entry>(serializer.Serialize(pair.Value)), false);
+            }
+        }
+        private void Change(string key, Entry entry, bool deleted)
+        {
+            FavoriteChange old; DateTime previous;
+            var now = DateTime.UtcNow;
+            if (data.Changes.TryGetValue(key, out old) && DateTime.TryParse(old.UpdatedAtUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out previous) && previous >= now) now = previous.ToUniversalTime().AddTicks(1);
+            data.Changes[key] = new FavoriteChange { Entry = entry, Deleted = deleted, UpdatedAtUtc = now.ToString("o") };
         }
         public void Save(List<Entry> entries)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(FilePath)));
-            string temporary = FilePath + ".tmp";
-            File.WriteAllText(temporary, new JavaScriptSerializer().Serialize(entries), new UTF8Encoding(false));
-            if (File.Exists(FilePath)) File.Replace(temporary, FilePath, FilePath + ".bak");
-            else File.Move(temporary, FilePath);
+            Update(entries); JsonFiles.Write(FilePath, data);
         }
         public static string Csv(IEnumerable<Entry> entries)
         {

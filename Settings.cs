@@ -8,8 +8,10 @@ namespace MyDict
 {
     public class AppSettings
     {
+        public string username { get; set; }
+        public CacheSyncOptions CacheSync { get; set; } = new CacheSyncOptions();
         public string FontName { get; set; } = "Microsoft YaHei UI";
-        public double FontSize { get; set; } = 16;
+        public double FontSize { get; set; } = 14;
         public string DefinitionFontName { get; set; } = "Georgia";
         public int DelayMs { get; set; } = 650;
         public string Provider { get; set; } = "MyMemory";
@@ -22,6 +24,9 @@ namespace MyDict
         public DeepSeekOptions DeepSeek { get; set; } = new DeepSeekOptions();
         [ScriptIgnore] public System.Collections.Generic.Dictionary<string,string> Styles { get; set; }
         public void Validate() {
+            if (CacheSync == null) CacheSync = new CacheSyncOptions();
+            if (!string.IsNullOrWhiteSpace(username) && (!System.Text.RegularExpressions.Regex.IsMatch(username, "^[a-z0-9_-]{1,64}$") || System.Text.RegularExpressions.Regex.IsMatch(username, "^(con|prn|aux|nul|com[1-9]|lpt[1-9])$"))) throw new InvalidOperationException("username 只能使用 1–64 位小写英文字母、数字、下划线或连字符，且不能为系统保留名称。");
+            CacheSync.Validate();
             if(DeepSeek==null)DeepSeek=new DeepSeekOptions();DeepSeek.Validate();
             if (string.IsNullOrWhiteSpace(FontName)) throw new InvalidOperationException("请选择字体。");
             if (double.IsNaN(FontSize) || double.IsInfinity(FontSize) || FontSize < 12 || FontSize > 28) throw new InvalidOperationException("字号范围为 12–28。");
@@ -56,7 +61,13 @@ namespace MyDict
             var options=new System.Collections.Generic.Dictionary<string,object>(raw);options.Remove("Styles");
             var settings = serializer.Deserialize<AppSettings>(serializer.Serialize(options));
             if (settings == null) throw new InvalidOperationException("设置文件为空。");
+            // Persist identity without reserializing credentials or external settings.
+            bool identityChanged = false;
+            if (string.IsNullOrWhiteSpace(settings.username)) { settings.username = CacheIdentity.DefaultUsername(); raw["username"] = settings.username; identityChanged = true; }
+            if (settings.CacheSync == null) settings.CacheSync = new CacheSyncOptions();
+            if (string.IsNullOrWhiteSpace(settings.CacheSync.DeviceId)) { settings.CacheSync.DeviceId = Guid.NewGuid().ToString("N"); identityChanged = true; }
             settings.Validate();
+            if (identityChanged) { raw["CacheSync"] = settings.CacheSync; ConfigLayout.Decorate(raw); JsonFiles.Write(path, raw); }
             object styleData;
             if(raw.TryGetValue("Styles",out styleData))settings.Styles=ConfigLayout.FlattenStyles(styleData);
             object manualKey;
@@ -122,6 +133,9 @@ namespace MyDict
         }
         public static void Save(AppSettings settings, string path = null)
         {
+            if (string.IsNullOrWhiteSpace(settings.username)) settings.username = CacheIdentity.DefaultUsername();
+            if (settings.CacheSync == null) settings.CacheSync = new CacheSyncOptions();
+            if (string.IsNullOrWhiteSpace(settings.CacheSync.DeviceId)) settings.CacheSync.DeviceId = Guid.NewGuid().ToString("N");
             settings.Validate(); path = path ?? FilePath;
             settings.ProtectedApiKey = string.IsNullOrEmpty(settings.ApiKey) ? null : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(settings.ApiKey), null, DataProtectionScope.CurrentUser));
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)));

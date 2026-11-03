@@ -4,5 +4,5 @@ using System.Reflection;
 [assembly: AssemblyCompany("Yance Feng & Codex")]
 [assembly: AssemblyVersion("1.5.0.0")]
 [assembly: AssemblyFileVersion("1.5.0.0")]
-[assembly: AssemblyInformationalVersion("1.5.0-dev")]
+[assembly: AssemblyInformationalVersion("1.5.0")]
 

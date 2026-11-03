@@ -92,6 +92,8 @@ namespace MyDict
         public static void Decorate(Dictionary<string,object> root)
         {
             var notes=new Dictionary<string,object> {
+                {"username","留空时由本机 MachineGuid 和 Windows 用户 SID 的哈希生成固定 device- 标识，可手动修改。已有值保留；清空后按设备重新生成。只允许小写英文字母、数字、下划线、连字符。相同 username 跨设备同步，不同 username 分开保存。"},
+                {"CacheSync","Gitee SQLite 同步设置。本地查词及收藏通过后台事务立即保存；首次变更起约 30 分钟批量同步，启动时只拉取，关闭窗口不等待网络。"},
                 {"FontName","旧版界面字体兼容字段；当前显示字体请在 Styles 中修改。"},{"FontSize","旧版字号兼容字段，保留范围 12–28；当前显示字号由 Styles 决定。"},
                 {"DefinitionFontName","旧版英文释义字体兼容字段；当前使用 Styles 中的 font.doc.serif。"},
                 {"DelayMs","停止输入后自动查询的等待时间，单位毫秒，范围 300–3000。"},{"Provider","翻译来源：MyMemory 或 LibreTranslate。"},
@@ -112,6 +114,16 @@ namespace MyDict
             object styles;if(root.TryGetValue("Styles",out styles)&&styles!=null)root["Styles"]=GroupStyles(FlattenStyles(styles));
             object deepRaw;
             var serializer=new JavaScriptSerializer();
+            object syncRaw;
+            var sync = root.TryGetValue("CacheSync", out syncRaw) ? syncRaw as Dictionary<string,object> : null;
+            if (sync == null) { sync = serializer.Deserialize<Dictionary<string,object>>(serializer.Serialize(syncRaw ?? new CacheSyncOptions())); root["CacheSync"] = sync; }
+            sync["_说明"] = new Dictionary<string,object> {
+                {"Enabled","是否自动同步 Gitee；关闭后本地 SQLite 仍立即保存，手动同步按钮可单次同步。"},
+                {"Repository","SSH 仓库地址，默认 git@gitee.com:hippo-yf/MyDict-Cache.git。仓库需要预先创建并授予当前 SSH 密钥读写权限。"},
+                {"PrivateKeyPath","本机 SSH 私钥路径，留空使用 SSH 配置或 agent。密钥文件和设置不上传；每台设备独立配置。需要安装 Git 和 SSH，并预先验证 Gitee 主机密钥。"},
+                {"KnownHostsPath","可选的 SSH known_hosts 文件路径，留空使用 SSH 默认位置；仅接受已验证的 Gitee 主机密钥。"},
+                {"DeviceId","首次生成并固定的随机设备种子；结合本机与系统用户生成同步文件标识，复制设置到其他设备仍使用独立文件。一般无需修改。"}
+            };
             var deep=root.TryGetValue("DeepSeek",out deepRaw)?deepRaw as Dictionary<string,object>:null;
             if(deep==null){deep=serializer.Deserialize<Dictionary<string,object>>(serializer.Serialize(new DeepSeekOptions()));root["DeepSeek"]=deep;}
             deep["_说明"]=new Dictionary<string,object>{{"Enabled","是否启用 DeepSeek。true 时直接输入和历史导航只读缓存；点击查询按钮或解释中的单词可调用 API。"},{"ApiKey","DeepSeek API 密钥，保存在本地 JSON 中，请勿公开。"},{"Endpoint","完整 HTTPS Chat Completions 接口地址，默认 https://api.deepseek.com/chat/completions。"},{"Model","模型名称，默认 deepseek-flash；可按服务提供方文档修改。"},{"TimeoutSeconds","请求超时秒数，范围 10–300。"},{"MaxTokens","输出 token 上限，范围 512–16384；截断时可适当增大。"}};

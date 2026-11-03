@@ -26,6 +26,21 @@ tests/merge-init-*/
 /example.png
 /styles.yaml
 !/tests/DeepSeekTests.cs
+!/tests/CacheSyncTests.cs
 
 # Local private keys must never be committed.
 assets/id_ed25519
+profiles/
+cache-sync/
+.legacy-cache-owner
+/imex/
+!/tests/WordbookImportTests.cs
+
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+!/tests/SqliteTests.cs
+/assets/qa/
+
+/fonts/local/
+!/tests/FontTests.cs

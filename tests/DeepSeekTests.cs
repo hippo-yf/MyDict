@@ -16,10 +16,10 @@ class DeepSeekTests
 {
  class Fake:HttpMessageHandler
  {
-  public int Calls;public int InvalidResponses;public bool Blank;public int Delay=15;public bool Fail;public string RequestText,Auth;
+  public volatile int Calls;public bool RanOnUiThread;public int InvalidResponses;public bool Blank;public int Delay=15;public bool Fail;public string RequestText,Auth;
   protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token)
   {
-   Calls++;int version=Calls;Auth=request.Headers.Authorization.ToString();RequestText=await request.Content.ReadAsStringAsync();await Task.Delay(Delay,token);
+   RanOnUiThread|=SynchronizationContext.Current is DispatcherSynchronizationContext;Calls++;int version=Calls;Auth=request.Headers.Authorization.ToString();RequestText=await request.Content.ReadAsStringAsync();await Task.Delay(Delay,token);
    if(Fail)return new HttpResponseMessage(HttpStatusCode.Unauthorized){Content=new StringContent("do not expose server error")};
    string result=new JavaScriptSerializer().Serialize(new{word="bank",translation="银行",phonetic="/bæŋk/",meanings=new[]{new{partOfSpeech="noun",definitions=new[]{new{definition="A financial institution.",chinese="金融机构，版本"+version,example="A bank.",usageNote="可数名词",collocations=new[]{new{text="bank account",chinese="银行账户"}},examples=new[]{new{text="She saves money.",chinese="她存钱。",grammarNote="主谓宾",segments=new[]{new{text="She",role="subject",pos="pronoun"},new{text=" saves",role="predicate",pos="verb"},new{text=" money.",role="object",pos="noun"}}}}}}}},forms=new{Plural="banks"},derived=new[]{"banker"},origin=""});
    if(version<=InvalidResponses)result=Blank?"   ":"{\"word\":\"bank\",\"meanings\":[";
@@ -49,7 +49,7 @@ class DeepSeekTests
   var app=new App();LoadResources(app);app.ShutdownMode=ShutdownMode.OnExplicitShutdown;SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));MainWindow w=null;
   try
   {
-   var options=new DeepSeekOptions{Enabled=true,ApiKey="test-key"};var settings=new AppSettings{DeepSeek=options,DelayMs=300};
+   var options=new DeepSeekOptions{Enabled=true,ApiKey="test-key"};var settings=new AppSettings{DeepSeek=options,DelayMs=300,username="deepseek-test",CacheSync=new CacheSyncOptions{Enabled=false}};
    string path=Path.Combine(folder,"settings.json");typeof(SettingsStore).GetField("FilePath").SetValue(null,path);typeof(LookupCache).GetField("DefaultPath").SetValue(null,Path.Combine(folder,"lookup-cache.json"));SettingsStore.Save(settings);
    ThemeStyles.EnsureLoaded();
    var verb=DeepSeekService.Parse("go",new JavaScriptSerializer().Serialize(new{translation="去；走",summary="去；前往",meanings=new[]{new{partOfSpeech="verb",definitions=new[]{new{definition="To move.",chinese="移动。"}}}},forms=new{ThirdPerson="goes",PresentParticiple="going",Past="went",PastParticiple="gone"},derived=new[]{"goer n. 常去的人"}}),new DeepSeekOptions());
@@ -57,40 +57,44 @@ class DeepSeekTests
    var verbDoc=EntryDocument.Build(verb);var verbText=new System.Windows.Documents.TextRange(verbDoc.ContentStart,verbDoc.ContentEnd).Text;
    Check(verbText.Contains("去；前往")&&verbText.Contains("过去式 went")&&!verbText.Contains("v. 动词"),"Header summary/forms or POS duplication incorrect");
 
-   var c=new LookupCache();var ai=DeepSeekService.Parse("bank","{\"translation\":\"AI旧结果\",\"word\":\"bank\",\"meanings\":[]}",options);
+   var c=new LookupCache(Path.Combine(folder,"profiles",settings.username,"lookup-cache.json")){Username=settings.username};var ai=DeepSeekService.Parse("bank","{\"translation\":\"AI旧结果\",\"word\":\"bank\",\"meanings\":[]}",options);
    c.Record(LookupCache.KeyForEntry(ai),ai);c.Record(LookupCache.Key("bank","en|zh-CN",settings),Normal("bank"));c.Save();
-   w=new MainWindow();var favorite=Field(w,"store");favorite.GetType().GetField("FilePath").SetValue(favorite,Path.Combine(folder,"favorites.json"));w.GetType().GetField("entries",Flags).SetValue(w,new List<Entry>());
-   var fake=new Fake();w.GetType().GetField("deepSeek",Flags).SetValue(w,new DeepSeekService(fake));w.Show();w.UpdateLayout();
+   w=new MainWindow();
+   var fake=new Fake();w.GetType().GetField("deepSeek",Flags).SetValue(w,new DeepSeekService(fake));w.Show();w.UpdateLayout();Pump(()=>(bool)Field(w,"databaseReady")&&Content(w).Contains("AI旧结果"));
    Check(Content(w).Contains("AI旧结果"),"DeepSeek not preferred on history restore");
    var query=(TextBox)w.FindName("Query");var button=(Button)w.FindName("SearchButton");var toggle=(System.Windows.Controls.Primitives.ToggleButton)w.FindName("DeepSeekCheck");
    query.Text="newword";Wait(600);Check(fake.Calls==0,"Typing triggered DeepSeek API");
    button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Pump(()=>fake.Calls==1&&Field(w,"request")==null);
    Check(Content(w).Contains("版本1")&&Content(w).Contains("DeepSeek")&&!Content(w).Contains("Free Dictionary API"),"AI content or provenance incorrect");
+   Check(!fake.RanOnUiThread,"Online service ran on UI dispatcher");
    Check(!Content(w).Contains("来源："),"Source/time heading still visible");
    Check(fake.Auth=="Bearer test-key"&&fake.RequestText.Contains("json_object")&&fake.RequestText.Contains("deepseek-flash"),"API request contract incorrect");
    button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Pump(()=>fake.Calls==2&&Field(w,"request")==null);
    Check(Content(w).Contains("版本2"),"Button did not refresh cached result");
    Check(Content(w).Contains("bank account（银行账户）")&&Content(w).Contains("她存钱。")&&!Content(w).Contains("句法  ")&&!Content(w).Contains("DeepSeek AI 生成的词义"),"Rich content missing or notice visible");
    var adjust=w.GetType().GetMethod("AdjustReading",Flags);
-   double oldSize=ThemeStyles.Number("number.book.word_size"),oldLeading=ThemeStyles.Number("number.book.word_line_height");
+   double oldSize=ThemeStyles.Number("number.book.word_size"),oldLeading=ThemeStyles.Number("number.book.word_line_height"),oldDocLeading=ThemeStyles.Number("number.doc.leading_scale");
    adjust.Invoke(w,new object[]{System.Windows.Input.Key.OemPlus,System.Windows.Input.ModifierKeys.Control});
    Check(ThemeStyles.Number("number.book.word_size")>oldSize&&SettingsStore.Load().Styles["number.doc.scale"]!="1","Font shortcut not persisted");
    adjust.Invoke(w,new object[]{System.Windows.Input.Key.OemCloseBrackets,System.Windows.Input.ModifierKeys.Control});
-   Check(ThemeStyles.Number("number.book.word_line_height")>oldLeading&&ThemeStyles.Number("number.doc.leading_scale")>1,"Line shortcut failed");
+   Check(ThemeStyles.Number("number.book.word_line_height")>oldLeading&&ThemeStyles.Number("number.doc.leading_scale")>oldDocLeading,"Line shortcut failed");
    Check(!SentenceStyles.Valid("She saves money.",new[]{new GrammarSegment{Text="wrong",Role="subject"}}),"Invalid spans accepted");
-   var cache=(LookupCache)Field(w,"cache");Check(cache.FindDeepSeek("newword","en|zh-CN").Record.Meanings[0].Senses[0].Chinese.Contains("版本2"),"Updated result not cached");
+   var cache=(WordDatabase)Field(w,"database");Check(cache.Find("newword","en|zh-CN",true)?.Entry.Record.Meanings[0].Senses[0].Chinese.Contains("版本2")==true,"Updated result not cached");
    Check(toggle.Foreground.ToString()=="#FF4D6BFE","Enabled icon not blue");
    toggle.IsChecked=false;Wait(550);Check(fake.Calls==2&&Content(w).Contains("版本2"),"Disabled AI cache preference failed");
    Check(toggle.Foreground.ToString()=="#FFFFFFFF","Disabled icon not white");
    toggle.IsChecked=true;Wait(550);Check(fake.Calls==2,"Toggle triggered DeepSeek API");
-   int beforeClick=fake.Calls;((RichTextBox)w.FindName("ResultView")).RaiseEvent(new EntryDocument.WordLookupArgs("clicked"));Pump(()=>fake.Calls==beforeClick+1&&Field(w,"request")==null);Check(query.Text=="clicked"&&cache.FindDeepSeek("clicked","en|zh-CN")!=null,"DeepSeek word click did not query");
-   fake.Delay=250;query.Text="slow";button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));query.Text="next";Wait(650);
-   Check(cache.FindDeepSeek("slow","en|zh-CN")==null&&fake.Calls==4,"Canceled request polluted cache or auto queried");
+   int beforeClick=fake.Calls;((RichTextBox)w.FindName("ResultView")).RaiseEvent(new EntryDocument.WordLookupArgs("clicked"));Pump(()=>fake.Calls==beforeClick+1&&Field(w,"request")==null);Check(query.Text=="clicked"&&cache.Find("clicked","en|zh-CN",true)?.Entry!=null,"DeepSeek word click did not query");
+   fake.Delay=250;query.Text="slow";button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Pump(()=>fake.Calls==4);query.Text="next";Wait(650);
+   Check(cache.Find("slow","en|zh-CN",true)?.Entry==null&&fake.Calls==4,"Canceled request polluted cache or auto queried");
+   string lastSuccess=cache.Find("newword","en|zh-CN",true)?.Entry.SuccessfulQueryAtUtc;Check(!string.IsNullOrEmpty(lastSuccess),"Successful query timestamp missing");
    fake.Delay=15;fake.Fail=true;query.Text="newword";button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));Pump(()=>Field(w,"request")==null);
-   Check(cache.FindDeepSeek("newword","en|zh-CN").Record.Meanings[0].Senses[0].Chinese.Contains("版本2"),"Failure replaced valid cache");
+   Check(cache.Find("newword","en|zh-CN",true)?.Entry.SuccessfulQueryAtUtc==lastSuccess,"Failed lookup changed successful query timestamp");
+   Check(cache.Find("newword","en|zh-CN",true)?.Entry.Record.Meanings[0].Senses[0].Chinese.Contains("版本2")==true,"Failure replaced valid cache");
    Check(!((TextBlock)w.FindName("StateIcon")).ToolTip.ToString().Contains("test-key"),"Secret exposed in error");
    bool rejected=false;try{DeepSeekService.Parse("x"," ",options);}catch(InvalidOperationException){rejected=true;}Check(rejected,"Empty model content accepted");
-   var loaded=new LookupCache();loaded.Load();Check(loaded.FindDeepSeek("newword","en|zh-CN").LookupModel=="deepseek-flash"&&loaded.FindDeepSeek("newword","en|zh-CN").Record.Meanings[0].Senses[0].Examples[0].Segments.Count==3,"Rich result/provenance not persisted");
+   Check(!File.Exists(Path.Combine(folder,"profiles",settings.username,"favorites.json")),"Created a second JSON favorite cache");
+   var loaded=new WordDatabase(cache.FilePath,settings.username);loaded.Open();Check(loaded.Find("newword","en|zh-CN",true).Entry.LookupModel=="deepseek-flash"&&loaded.Find("newword","en|zh-CN",true).Entry.Record.Meanings[0].Senses[0].Examples[0].Segments.Count==3,"Rich SQLite result not persisted");
    fake.Fail=false;fake.Delay=15;query.Focus();System.Windows.Input.Keyboard.Focus(query);
    int beforeEnter=fake.Calls;
    var enter=new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,PresentationSource.FromVisual(w),0,System.Windows.Input.Key.Enter){RoutedEvent=System.Windows.Input.Keyboard.PreviewKeyDownEvent};
@@ -104,8 +108,8 @@ class DeepSeekTests
    var flat=DeepSeekService.Parse("bank","\uFEFF```json\n{\"translation\":\"银行\",\"senses\":[{\"partOfSpeech\":\"noun\",\"definition\":\"An institution.\",\"chinese\":\"金融机构。\"}]}\n```",options);Check(flat.Record.Meanings.Count==1,"Flat schema/BOM/fences not parsed");
    Console.WriteLine("PASS: DeepSeek typed-input manual-only, automatic word click, hidden provenance heading, button refresh, preferred source, request schema/auth, cancellation, error/cache preservation, persisted provenance");return 0;
   }
-  catch(Exception ex){Console.Error.WriteLine(ex);return 1;}
-  finally{if(w!=null)w.Close();app.Shutdown();foreach(string file in Directory.GetFiles(folder))File.Delete(file);Directory.Delete(folder);}
+  catch(Exception ex){if(w!=null)Console.Error.WriteLine("UI state: "+((TextBlock)w.FindName("StateIcon")).ToolTip+" ready="+Field(w,"databaseReady"));Console.Error.WriteLine(ex);return 1;}
+  finally{if(w!=null)w.Close();app.Shutdown();Directory.Delete(folder,true);}
  }
 }
 
