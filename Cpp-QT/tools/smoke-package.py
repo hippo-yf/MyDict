@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run a packaged binary with temporary data and no Conda paths in its environment."""
 import os
+import plistlib
 from pathlib import Path
 import subprocess
 import sys
@@ -12,6 +13,11 @@ if sys.platform=='win32':
     gui=stage/'bin/MyDictQt.exe'
 elif sys.platform=='darwin':
     gui=stage/'MyDictQt.app/Contents/MacOS/MyDictQt'
+    bundle=stage/'MyDictQt.app/Contents'
+    with (bundle/'Info.plist').open('rb') as file:
+        info=plistlib.load(file)
+    icon=info.get('CFBundleIconFile','')
+    assert icon and (bundle/'Resources'/icon).exists(), 'macOS application icon is missing'
 else:
     gui=stage/'MyDictQt'
 env=os.environ.copy()

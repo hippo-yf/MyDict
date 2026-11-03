@@ -22,6 +22,23 @@ target_link_libraries(mydict_ui PUBLIC mydict_core Qt${QT_VERSION_MAJOR}::Widget
 add_executable(MyDictQt WIN32 MACOSX_BUNDLE src/main.cpp)
 if(WIN32)
   target_sources(MyDictQt PRIVATE app.rc)
+elseif(APPLE)
+  set(MYDICT_MACOS_ICON "${CMAKE_CURRENT_BINARY_DIR}/app-icon.icns")
+  add_custom_command(
+    OUTPUT "${MYDICT_MACOS_ICON}"
+    COMMAND /bin/bash "${CMAKE_CURRENT_SOURCE_DIR}/tools/macos-icon.sh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/app-icon.png" "${MYDICT_MACOS_ICON}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/app-icon.png"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/macos-icon.sh"
+    COMMENT "Generating the macOS Finder and Dock icon"
+    VERBATIM)
+  # Generate before the bundle's resource-copy phase, including a clean first build.
+  add_custom_target(MyDictMacIcon DEPENDS "${MYDICT_MACOS_ICON}")
+  add_dependencies(MyDictQt MyDictMacIcon)
+  set_source_files_properties("${MYDICT_MACOS_ICON}" PROPERTIES
+    GENERATED TRUE MACOSX_PACKAGE_LOCATION "Resources")
+  target_sources(MyDictQt PRIVATE "${MYDICT_MACOS_ICON}")
+  set_target_properties(MyDictQt PROPERTIES MACOSX_BUNDLE_ICON_FILE "app-icon.icns")
 endif()
 target_link_libraries(MyDictQt PRIVATE mydict_ui)
 set_target_properties(MyDictQt PROPERTIES MACOSX_BUNDLE_BUNDLE_NAME "拾词 MyDict" MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.hippo-yf.mydict" MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}" MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
