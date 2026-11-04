@@ -16,6 +16,7 @@
 #include <QUuid>
 #include <QVariant>
 #include <QSet>
+#include <QThread>
 #include <algorithm>
 #include <stdexcept>
 
@@ -30,6 +31,32 @@ const QByteArray LegacyPayloadPrefix = QByteArrayLiteral("MYDICT-QT-JSON1\n");
 
 [[noreturn]] void fail(const QString &message) {
     throw std::runtime_error(message.toUtf8().constData());
+}
+void atomicSettingsWrite(const QString &path, const QByteArray &bytes, const QString &failureMessage) {
+#ifdef Q_OS_WIN
+    constexpr int attempts = 4;
+#else
+    constexpr int attempts = 1;
+#endif
+    QString error;
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        {
+            // A failed commit cancels its QSaveFile. Each retry needs a fresh
+            // temporary file, and must never fall back to truncating the target.
+            QSaveFile file(path); file.setDirectWriteFallback(false);
+            if (!file.open(QIODevice::WriteOnly)) error = file.errorString();
+            else if (file.write(bytes) != bytes.size()) {
+                error = file.errorString(); file.cancelWriting();
+            } else if (file.commit()) return;
+            else error = file.errorString();
+        }
+#ifdef Q_OS_WIN
+        // Antivirus/indexer/editor handles can briefly deny FILE_SHARE_DELETE.
+        // Bound the additional GUI-thread wait to 5 + 10 + 20 milliseconds.
+        if (attempt + 1 < attempts) QThread::msleep(5UL << attempt);
+#endif
+    }
+    fail(failureMessage + QStringLiteral(" ") + error);
 }
 QString nonNull(QString value) { return value.isNull() ? QStringLiteral("") : value; }
 QString isoNow() {
@@ -382,14 +409,13 @@ void Settings::save() {
     QFile original(path);
     if (original.exists()) {
         if (!original.open(QIODevice::ReadOnly)) fail(QStringLiteral("无法备份原设置。"));
-        QSaveFile backup(path + QStringLiteral(".bak"));
-        if (!backup.open(QIODevice::WriteOnly)) fail(QStringLiteral("无法创建 settings.json.bak。"));
         auto old = original.readAll();
-        if (backup.write(old) != old.size() || !backup.commit()) fail(QStringLiteral("保存设置备份失败。"));
+        const auto readError = original.error(); const auto readMessage = original.errorString();
         original.close();
+        if (readError != QFileDevice::NoError) fail(QStringLiteral("无法读取原设置进行备份。 ") + readMessage);
+        atomicSettingsWrite(path + QStringLiteral(".bak"), old, QStringLiteral("保存 settings.json.bak 失败，原设置已保留。"));
     }
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) fail(QStringLiteral("保存 settings.json 失败，原文件已保留。"));
+    atomicSettingsWrite(path, bytes, QStringLiteral("保存 settings.json 失败，原文件已保留。"));
     data = candidate; loadedBytes = bytes;
 }
 bool Settings::reload() {
@@ -492,6 +518,10 @@ QJsonObject Database::find(QString word, QString pair) const {
     Connection c(filePath, true); verify(c.db, user, true);
     return selectEntry(c.db, QStringLiteral("w.normalized=? AND w.pair=?"), {normalizeWord(word), pair});
 }
+QJsonObject Database::findForSource(QString word, QString pair, bool deepSeek) const {
+    Connection c(filePath, true); verify(c.db, user, true);
+    return selectEntry(c.db, QStringLiteral("w.normalized=? AND w.pair=? AND s.is_ai=?"), {normalizeWord(word), pair, deepSeek ? 1 : 0});
+}
 QJsonObject Database::findDeepSeek(QString word, QString pair) const {
     Connection c(filePath, true); verify(c.db, user, true);
     return selectEntry(c.db, QStringLiteral("w.normalized=? AND w.pair=? AND s.is_ai=1"), {normalizeWord(word), pair});
@@ -579,6 +609,24 @@ QJsonObject Database::navigate(int direction) {
     auto selected = query(c.db, QStringLiteral("SELECT w.id FROM history h JOIN sources s ON s.source_key=h.source_key JOIN words w ON w.id=s.word_id WHERE h.position=?"), {cursor});
     qint64 id = selected.next() ? selected.value(0).toLongLong() : 0; selected.finish();
     QJsonObject entry = id > 0 ? selectEntry(c.db, QStringLiteral("w.id=?"), {id}) : QJsonObject(); tx.commit(); return entry;
+}
+HistorySelection Database::navigateForSource(int direction, bool deepSeek) {
+    Connection c(filePath); verify(c.db, user); Transaction tx(c.db);
+    qint64 cursor = meta(c.db, QStringLiteral("cursor")).toLongLong();
+    qint64 last = scalar(c.db, QStringLiteral("SELECT COALESCE(MAX(position),-1) FROM history")).toLongLong();
+    qint64 next = cursor + (direction > 0 ? 1 : direction < 0 ? -1 : 0);
+    if (next >= 0 && next <= last) { cursor = next; setMeta(c.db, QStringLiteral("cursor"), QString::number(cursor)); }
+    // History identifies a word through its original source without reading that
+    // payload. Only the explicitly selected group's one displayed entry is decoded.
+    auto selected = query(c.db, QStringLiteral("SELECT w.id,w.word,w.pair FROM history h JOIN sources s ON s.source_key=h.source_key JOIN words w ON w.id=s.word_id WHERE h.position=?"), {cursor});
+    HistorySelection result;
+    qint64 id = 0;
+    if (selected.next()) {
+        id = selected.value(0).toLongLong(); result.word = selected.value(1).toString(); result.pair = selected.value(2).toString();
+    }
+    selected.finish();
+    if (id > 0) result.entry = selectEntry(c.db, QStringLiteral("w.id=? AND s.is_ai=?"), {id, deepSeek ? 1 : 0});
+    tx.commit(); return result;
 }
 bool Database::canNavigate(int direction) const {
     Connection c(filePath, true); verify(c.db, user, true);

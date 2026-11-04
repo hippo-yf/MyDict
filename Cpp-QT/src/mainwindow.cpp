@@ -188,7 +188,7 @@ void MainWindow::createUi() {
     back = makeButton("backButton", QStringLiteral("上一条查询"), "back"); forward = makeButton("forwardButton", QStringLiteral("下一条查询"), "forward");
     back->setEnabled(false); forward->setEnabled(false); bar->addWidget(back); bar->addWidget(forward);
     input = new QLineEdit; input->setObjectName("queryInput"); input->setPlaceholderText(QStringLiteral("输入中文或英文")); input->setClearButtonEnabled(true); input->setMinimumWidth(120); input->setMinimumHeight(34); input->setEnabled(false); bar->addWidget(input, 1);
-    deepSeek = makeButton("deepSeekButton", QStringLiteral("切换 DeepSeek 查词"), "whale"); deepSeek->setCheckable(true); deepSeek->setFixedWidth(34); bar->addWidget(deepSeek);
+    deepSeek = makeButton("deepSeekButton", QStringLiteral("切换查询和显示来源"), "whale"); deepSeek->setEnabled(false); deepSeek->setFixedWidth(34); bar->addWidget(deepSeek);
     query = new QPushButton(QStringLiteral("查询")); query->setObjectName("queryButton"); query->setMinimumWidth(54); query->setFixedHeight(34); query->setEnabled(false); bar->addWidget(query);
     star = makeButton("favoriteButton", QStringLiteral("收藏或取消收藏当前词"), "star"); star->setEnabled(false); bar->addWidget(star);
     copy = makeButton("copyButton", QStringLiteral("复制当前释义"), "copy"); copy->setEnabled(false); bar->addWidget(copy);
@@ -217,10 +217,10 @@ void MainWindow::createUi() {
     connect(inputDelay, &QTimer::timeout, this, [this] { lookup(false,false); });
     connect(query, &QPushButton::clicked, this, [this] { lookup(true,true); });
     connect(input, &QLineEdit::returnPressed, this, [this] { lookup(true,true); });
-    connect(deepSeek, &QPushButton::clicked, this, [this](bool checked) {
-        auto ai = settings.data.value("DeepSeek").toObject(); ai.insert("Enabled",checked); settings.data.insert("DeepSeek",ai);
+    connect(deepSeek, &QPushButton::clicked, this, [this] {
+        auto ai = settings.data.value("DeepSeek").toObject(); ai.insert("Enabled",!useDeepSeek()); settings.data.insert("DeepSeek",ai);
         try { settings.save(); } catch (const std::exception &e) { toast(QString::fromUtf8(e.what()), true); }
-        ++requestId; emit cancelOnline(); updateDeepSeek(); toast(checked ? QStringLiteral("已开启 DeepSeek查词") : QStringLiteral("已关闭 DeepSeek查词"));
+        updateDeepSeek();selectedPart.clear();lookup(false,false,false,true);
     });
     connect(star, &QPushButton::clicked, this, &MainWindow::favoriteCurrent);
     connect(copy, &QPushButton::clicked, this, [this] { QApplication::clipboard()->setText(browser->toPlainText()); toast(QStringLiteral("已复制释义")); });
@@ -231,9 +231,9 @@ void MainWindow::createUi() {
     connect(favoritesOnly, &QCheckBox::toggled, this, [this] { offset=0; refreshBook(); });
     connect(previous, &QPushButton::clicked, this, [this] { offset=qMax(0,offset-50); refreshBook(); }); connect(next, &QPushButton::clicked, this, [this] { if(offset+50<total) {offset+=50;refreshBook();} });
     connect(book, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
-        if (!initialized) return; auto db=database; auto id=item->data(Qt::UserRole).toLongLong(); ++requestId; emit cancelOnline(); auto revision=requestId;
+        if (!initialized) return;auto db=database;const auto word=item->data(Qt::UserRole+1).toString(),pair=item->data(Qt::UserRole+2).toString();const bool ai=useDeepSeek();inputDelay->stop();++requestId;emit cancelOnline();auto revision=requestId;query->setText(QStringLiteral("查询中"));
         ++pendingWrites;
-        background(this,[db,id]()mutable{auto entry=db.get(id);if(!entry.isEmpty())db.store(entry,true);return entry;},[this,revision](QJsonObject entry){writeFinished();if(revision!=requestId||entry.isEmpty())return; showEntry(entry);updateHistory();pages->setCurrentIndex(0); lookupTab->setChecked(true);bookTab->setChecked(false);QSignalBlocker block(input);input->setText(entry.value("Word").toString());},[this](QString e){writeFinished();toast(e,true);});
+        background(this,[db,word,pair,ai]()mutable{auto entry=db.findForSource(word,pair,ai);if(!entry.isEmpty())db.store(entry,true);return HistorySelection{word,pair,entry};},[this,revision](HistorySelection selection){writeFinished();if(revision!=requestId)return;showSelection(selection);updateHistory();pages->setCurrentIndex(0);lookupTab->setChecked(true);bookTab->setChecked(false);},[this,revision](QString e){writeFinished();if(revision==requestId){query->setText(QStringLiteral("查询"));toast(e,true);}});
     });
     connect(exportButton, &QPushButton::clicked, this, &MainWindow::exportBook);
     connect(sync, &QPushButton::clicked, this, [this] { runSync(false); });
@@ -250,12 +250,12 @@ void MainWindow::createUi() {
 }
 
 void MainWindow::initialize() {
-    auto db=database;
-    struct Initial {QJsonObject entry;bool dirty=false;};
-    background(this,[db]() mutable {db.initialize();return Initial{db.navigate(0),db.revision()>db.syncedRevision()};},[this](Initial initial) {
-        initialized=true;input->setEnabled(true);query->setEnabled(true);input->setFocus();updateHistory();
+    auto db=database;const bool ai=useDeepSeek();
+    struct Initial {HistorySelection selection;bool dirty=false;};
+    background(this,[db,ai]() mutable {db.initialize();return Initial{db.navigateForSource(0,ai),db.revision()>db.syncedRevision()};},[this,ai](Initial initial) {
+        initialized=true;input->setEnabled(true);query->setEnabled(true);deepSeek->setEnabled(true);input->setFocus();updateHistory();
         if(initial.dirty)dirty();
-        if(!initial.entry.isEmpty()&&input->text().isEmpty()){QSignalBlocker block(input);input->setText(initial.entry.value("Word").toString());showEntry(initial.entry);}
+        if(!initial.selection.word.isEmpty()&&input->text().isEmpty()){showSelection(initial.selection);if(ai!=useDeepSeek())lookup(false,false,false,true);}
         if(pages->currentIndex()==1)refreshBook();
         if(settings.data.value("CacheSync").toObject().value("Enabled").toBool(false))runSync(true);
     },[this](QString e) {toast(e,true);showMessage(QStringLiteral("无法打开词库"),e);});
@@ -289,6 +289,17 @@ void MainWindow::updateFonts(bool includePhonetic) {
 void MainWindow::showMessage(const QString &title,const QString &message) {
     messageTitle=title;messageText=message;updateFonts(false);
     browser->setHtml(EntryRenderer::message(title,message,settings.data));
+}
+void MainWindow::showSourcePlaceholder(const QString &word,bool loading) {
+    currentEntry={};selectedPart.clear();favorite=false;star->setEnabled(false);copy->setEnabled(false);query->setText(QStringLiteral("查询"));
+    star->setIcon(vectorIcon("star",QColor("#8A67C1")));
+    if(word.isEmpty()){showMessage(QStringLiteral("拾词"),QStringLiteral("输入中文或英文，即可开始查询。"));return;}
+    const auto source=useDeepSeek()?QStringLiteral("DeepSeek"):QStringLiteral("在线词典");
+    showMessage(word,loading?QStringLiteral("正在读取%1缓存…").arg(source):QStringLiteral("暂无%1释义，点击查询或按回车获取。").arg(source));
+}
+void MainWindow::showSelection(const HistorySelection &selection) {
+    {QSignalBlocker block(input);input->setText(selection.word);}
+    if(selection.entry.isEmpty())showSourcePlaceholder(selection.word);else showEntry(selection.entry);
 }
 
 void MainWindow::applySettings(bool restoreWindow) {
@@ -354,12 +365,13 @@ void MainWindow::reloadConfig() {
     auto rearm=[this]{if(QFile::exists(settings.path)&&!configWatcher->files().contains(settings.path))configWatcher->addPath(settings.path);};
     rearm();
     auto sourceSettings=[](QJsonObject data){QJsonObject result;for(auto key:{"Provider","LibreUrl","ApiKey","ProtectedApiKey","username"})result.insert(key,data.value(key));QJsonObject ai;for(auto key:{"Enabled","ApiKey","Endpoint","Model","TimeoutSeconds","MaxTokens"})ai.insert(key,data.value("DeepSeek").toObject().value(key));result.insert("DeepSeek",ai);return result;};
-    const auto oldSource=sourceSettings(settings.data);
+    const auto oldSource=sourceSettings(settings.data);const bool oldAi=useDeepSeek();
     try {
         if(!settings.reload())return;
         if(settings.databasePath()!=database.path())requestIdentityChange();
         if(oldSource!=sourceSettings(settings.data)){++requestId;emit cancelOnline();query->setText(QStringLiteral("查询"));}
         applySettings(false);
+        if(oldAi!=useDeepSeek()&&initialized&&!switchingIdentity)lookup(false,false,false,true);
     }catch(const std::exception &e){toast(QStringLiteral("设置未应用：")+QString::fromUtf8(e.what()),true);}
     rearm();
 }
@@ -385,55 +397,65 @@ void MainWindow::changeIdentity(){
         // All old writes and their completions have drained before invalidating
         // outstanding reads. Each old job still owns its original database value.
         setProperty("storageGeneration",property("storageGeneration").toULongLong()+1);
-        struct Initial{QJsonObject entry;bool dirty=false;};
+        const bool ai=useDeepSeek();
+        struct Initial{HistorySelection selection;bool dirty=false;};
         ++pendingWrites;
-        background(this,[nextDatabase,nextLock]()mutable{nextDatabase.initialize();return Initial{nextDatabase.navigate(0),nextDatabase.revision()>nextDatabase.syncedRevision()};},
-            [this,nextDatabase,nextLock,targetPath,targetUser](Initial initial){
+        background(this,[nextDatabase,nextLock,ai]()mutable{nextDatabase.initialize();return Initial{nextDatabase.navigateForSource(0,ai),nextDatabase.revision()>nextDatabase.syncedRevision()};},
+            [this,nextDatabase,nextLock,targetPath,targetUser,ai](Initial initial){
                 writeFinished();
                 if(pendingClose)return;
                 if(settings.databasePath()!=targetPath){QTimer::singleShot(0,this,&MainWindow::changeIdentity);return;}
                 database=nextDatabase;profileLock=nextLock;activeUsername=targetUser;offset=0;total=0;firstDirtyAt=0;dirtyGeneration=0;
-                switchingIdentity=false;initialized=true;pages->setEnabled(true);input->setEnabled(true);query->setEnabled(true);star->setEnabled(false);copy->setEnabled(false);query->setText(QStringLiteral("查询"));
-                {QSignalBlocker block(input);input->setText(initial.entry.value("Word").toString());}
+                switchingIdentity=false;initialized=true;pages->setEnabled(true);input->setEnabled(true);query->setEnabled(true);deepSeek->setEnabled(true);star->setEnabled(false);copy->setEnabled(false);query->setText(QStringLiteral("查询"));
                 currentEntry={};selectedPart.clear();
-                if(initial.entry.isEmpty())showMessage(QStringLiteral("拾词"),QStringLiteral("输入中文或英文，即可开始查询。"));else showEntry(initial.entry);
+                showSelection(initial.selection);if(ai!=useDeepSeek())lookup(false,false,false,true);
                 if(initial.dirty)dirty();updateHistory();if(pages->currentIndex()==1)refreshBook();toast(QStringLiteral("已切换用户词库：")+targetUser);
                 if(settings.data.value("CacheSync").toObject().value("Enabled").toBool())runSync(true);
             },[this](QString error){writeFinished();if(pendingClose)return;switchingIdentity=false;pages->setEnabled(true);toast(error,true);initialize();});
     }catch(const std::exception &e){switchingIdentity=false;pages->setEnabled(true);toast(QString::fromUtf8(e.what()),true);initialize();}
 }
 bool MainWindow::useDeepSeek() const {return settings.data.value("DeepSeek").toObject().value("Enabled").toBool(false);}
-void MainWindow::updateDeepSeek(){deepSeek->setChecked(useDeepSeek());deepSeek->setIcon(vectorIcon("whale",useDeepSeek()?QColor("#4D6BFE"):QColor(Qt::white)));deepSeek->setAccessibleName(useDeepSeek()?QStringLiteral("DeepSeek 已开启，点击关闭"):QStringLiteral("DeepSeek 已关闭，点击开启"));}
+void MainWindow::updateDeepSeek(){
+    const bool ai=useDeepSeek();const auto source=ai?QStringLiteral("DeepSeek"):QStringLiteral("在线词典");
+    deepSeek->setIcon(vectorIcon(ai?"whale":"online",ai?QColor("#4D6BFE"):QColor(Qt::white)));
+    deepSeek->setProperty("lookupSource",ai?"DeepSeek":"Online");
+    deepSeek->setAccessibleName(QStringLiteral("查询与显示来源：%1；点击切换为%2").arg(source,ai?QStringLiteral("在线词典"):QStringLiteral("DeepSeek")));
+    query->setAccessibleName(QStringLiteral("使用%1查询并更新释义").arg(source));
+}
 
-void MainWindow::lookup(bool force,bool manual,bool link) {
+void MainWindow::lookup(bool force,bool manual,bool link,bool cacheOnly) {
     if(!initialized||pendingClose)return;
     inputDelay->stop();QString text=input->text().trimmed();
     ++requestId;emit cancelOnline();quint64 revision=requestId;
-    if(text.isEmpty()){currentEntry={};selectedPart.clear();favorite=false;star->setEnabled(false);copy->setEnabled(false);showMessage(QStringLiteral("拾词"),QStringLiteral("输入中文或英文，即可开始查询。"));return;}
-    if(text.toUtf8().size()>500){toast(QStringLiteral("单次查询最多 500 个 UTF-8 字节，请缩短输入。"),true);return;}
+    if(text.isEmpty()){showSourcePlaceholder({});return;}
+    const bool ai=useDeepSeek();
+    if(cacheOnly&&!currentEntry.isEmpty()&&isDeepSeek(currentEntry)!=ai)showSourcePlaceholder(text,true);
+    if(text.toUtf8().size()>500){if(cacheOnly)showSourcePlaceholder({});query->setText(QStringLiteral("查询"));toast(QStringLiteral("单次查询最多 500 个 UTF-8 字节，请缩短输入。"),true);return;}
     const QString pair=detectPair(text);
-    if(removingWords.contains(identity(text,pair))){toast(QStringLiteral("正在移除该词，请稍后查询。"));return;}
-    const bool ai=useDeepSeek(); auto db=database;
+    if(removingWords.contains(identity(text,pair))){if(cacheOnly)showSourcePlaceholder({});query->setText(QStringLiteral("查询"));toast(QStringLiteral("正在移除该词，请稍后查询。"));return;}
+    auto db=database;
+    if(!cacheOnly)query->setText(QStringLiteral("查询中"));
     struct Cached{QJsonObject entry;bool existingAi=false;};
-    background(this,[db,text,pair,ai,manual,force]{Cached c;c.entry=db.find(text,pair);if(ai&&manual&&force)c.existingAi=db.hasDeepSeek(text,pair);return c;},
-        [this,revision,text,ai,manual,force,link](Cached cached){
+    background(this,[db,text,pair,ai,manual,force]{Cached c;if(!force||(ai&&!manual))c.entry=db.findForSource(text,pair,ai);if(ai&&manual&&force)c.existingAi=db.hasDeepSeek(text,pair);return c;},
+        [this,revision,text,ai,manual,force,link,cacheOnly](Cached cached){
         if(revision!=requestId||pendingClose)return;
+        if(cacheOnly){if(cached.entry.isEmpty())showSourcePlaceholder(text);else showEntry(cached.entry);return;}
         if(ai&&manual&&force&&cached.existingAi){
             QMessageBox box(QMessageBox::Question,QStringLiteral("再次查询 DeepSeek"),QStringLiteral("“%1”已有 DeepSeek 释义。再次查询将调用 API 并更新内容，是否继续？").arg(text),QMessageBox::Yes|QMessageBox::No,this);box.setDefaultButton(QMessageBox::No);box.button(QMessageBox::Yes)->setText(QStringLiteral("再次查询"));box.button(QMessageBox::No)->setText(QStringLiteral("取消"));
-            if(box.exec()!=QMessageBox::Yes)return;
+            if(box.exec()!=QMessageBox::Yes){if(revision==requestId)query->setText(QStringLiteral("查询"));return;}
             if(revision!=requestId)return;
         }
         const bool cachedAllowed=!force||(ai&&!manual);
         if(cachedAllowed&&!cached.entry.isEmpty()){
             auto db=database;QJsonObject entry=cached.entry;++pendingWrites;
-            background(this,[db,entry]()mutable{db.store(entry,true);return true;},[this,revision,entry](bool){writeFinished();if(revision==requestId)showEntry(entry);updateHistory();},[this](QString e){writeFinished();toast(e,true);});return;
+            background(this,[db,entry]()mutable{db.store(entry,true);return true;},[this,revision,entry](bool){writeFinished();if(revision==requestId)showEntry(entry);updateHistory();},[this,revision](QString e){writeFinished();if(revision==requestId){query->setText(QStringLiteral("查询"));toast(e,true);}});return;
         }
         if(ai&&!manual&&!link){
-            if(currentEntry.value("Word").toString()!=text){currentEntry={};selectedPart.clear();star->setEnabled(false);copy->setEnabled(false);showMessage(text,QStringLiteral("点击查询或按回车，使用 DeepSeek 获取释义。"));}
+            showSourcePlaceholder(text);
             return;
         }
         launchOnline(revision,text,ai);
-    },[this,revision](QString e){if(revision==requestId)toast(e,true);});
+    },[this,revision](QString e){if(revision==requestId){query->setText(QStringLiteral("查询"));toast(e,true);}});
 }
 void MainWindow::launchOnline(quint64 revision,const QString &text,bool ai){
     if(revision!=requestId)return;query->setText(QStringLiteral("查询中"));
@@ -442,21 +464,44 @@ void MainWindow::launchOnline(quint64 revision,const QString &text,bool ai){
 }
 void MainWindow::receiveEntry(quint64 revision,QJsonObject entry){
     if(revision!=requestId||pendingClose||removingWords.contains(identity(entry.value("Word").toString(),entry.value("Pair").toString())))return;
-    auto db=database;++pendingWrites;
-    background(this,[db,entry]()mutable{db.store(entry,true);return db.find(entry.value("Word").toString(),entry.value("Pair").toString());},[this,revision](QJsonObject stored){writeFinished();dirty();if(revision==requestId&&!stored.isEmpty())showEntry(stored);updateHistory();},[this,revision](QString e){writeFinished();if(revision==requestId){query->setText(QStringLiteral("查询"));toast(e,true);}});
+    auto db=database;const bool ai=useDeepSeek();++pendingWrites;
+    background(this,[db,entry,ai]()mutable{db.store(entry,true);return db.findForSource(entry.value("Word").toString(),entry.value("Pair").toString(),ai);},[this,revision](QJsonObject stored){writeFinished();dirty();if(revision==requestId&&!stored.isEmpty())showEntry(stored);updateHistory();},[this,revision](QString e){writeFinished();if(revision==requestId){query->setText(QStringLiteral("查询"));toast(e,true);}});
 }
 void MainWindow::showEntry(const QJsonObject &entry,bool refreshFavorite){
     bool changed=currentEntry.value("Word")!=entry.value("Word");currentEntry=entry;if(changed)selectedPart.clear();
     updateFonts(!entry.value("Record").toObject().value("Phonetic").toString().isEmpty());
     if(!selectedPart.isEmpty()){bool found=false;for(auto meaning:entry.value("Record").toObject().value("Meanings").toArray())if(meaning.toObject().value("PartOfSpeech").toString()==selectedPart){found=true;break;}if(!found)selectedPart.clear();}
     browser->setHtml(EntryRenderer::render(entry,settings.data,selectedPart));query->setText(QStringLiteral("查询"));copy->setEnabled(true);star->setEnabled(false);
-    if(refreshFavorite){auto db=database;auto word=entry.value("Word").toString(),pair=entry.value("Pair").toString();auto id=requestId;background(this,[db,word,pair]{return db.isFavorite(word,pair);},[this,id,word,pair](bool saved){if(id!=requestId||identity(currentEntry.value("Word").toString(),currentEntry.value("Pair").toString())!=identity(word,pair))return;favorite=saved;star->setIcon(vectorIcon(saved?"star-filled":"star",QColor("#8A67C1")));star->setEnabled(true);},[this](QString e){toast(e,true);});}
+    if(refreshFavorite)refreshFavoriteState();
+}
+void MainWindow::refreshFavoriteState(){
+    star->setEnabled(false);if(currentEntry.isEmpty())return;
+    auto db=database;const auto word=currentEntry.value("Word").toString(),pair=currentEntry.value("Pair").toString();
+    if(favoriteWrites.contains(identity(word,pair)))return;
+    const auto id=requestId,version=favoriteRevision;
+    background(this,[db,word,pair]{return db.isFavorite(word,pair);},[this,id,version,word,pair](bool saved){
+        if(id!=requestId||version!=favoriteRevision||identity(currentEntry.value("Word").toString(),currentEntry.value("Pair").toString())!=identity(word,pair))return;
+        favorite=saved;star->setIcon(vectorIcon(saved?"star-filled":"star",QColor("#8A67C1")));star->setEnabled(true);
+    },[this,id,version](QString e){if(id==requestId&&version==favoriteRevision)toast(e,true);});
 }
 void MainWindow::updateHistory(){if(!initialized)return;auto db=database;background(this,[db]{return QPair<bool,bool>(db.canNavigate(-1),db.canNavigate(1));},[this](QPair<bool,bool> state){back->setEnabled(state.first);forward->setEnabled(state.second);},[this](QString e){toast(e,true);});}
-void MainWindow::navigate(int direction){if(!initialized||pendingClose)return;inputDelay->stop();++requestId;emit cancelOnline();auto id=requestId;auto db=database;background(this,[db,direction]()mutable{return db.navigate(direction);},[this,id](QJsonObject entry){if(id!=requestId||entry.isEmpty())return;{QSignalBlocker block(input);input->setText(entry.value("Word").toString());}showEntry(entry);updateHistory();},[this](QString e){toast(e,true);});}
+void MainWindow::navigate(int direction){
+    if(!initialized||pendingClose)return;inputDelay->stop();++requestId;emit cancelOnline();auto id=requestId;auto db=database;const bool ai=useDeepSeek();query->setText(QStringLiteral("查询中"));
+    background(this,[db,direction,ai]()mutable{return db.navigateForSource(direction,ai);},[this,id](HistorySelection selection){if(id!=requestId)return;query->setText(QStringLiteral("查询"));if(!selection.word.isEmpty())showSelection(selection);updateHistory();},[this,id](QString e){if(id==requestId){query->setText(QStringLiteral("查询"));toast(e,true);}});
+}
 void MainWindow::favoriteCurrent(){
-    if(!initialized||currentEntry.isEmpty()||!star->isEnabled())return;auto entry=currentEntry;auto db=database;bool desired=!favorite;auto revision=requestId;star->setEnabled(false);++pendingWrites;
-    background(this,[db,entry,desired]()mutable{db.setFavorite(entry.value("Word").toString(),entry.value("Pair").toString(),desired);return true;},[this,revision,desired](bool){writeFinished();dirty();if(revision==requestId){favorite=desired;star->setIcon(vectorIcon(desired?"star-filled":"star",QColor("#8A67C1")));star->setEnabled(true);}if(pages->currentIndex()==1)refreshBook();},[this](QString e){writeFinished();star->setEnabled(!currentEntry.isEmpty());toast(e,true);});
+    if(!initialized||currentEntry.isEmpty()||!star->isEnabled())return;
+    writeFavorite(currentEntry.value("Word").toString(),currentEntry.value("Pair").toString(),!favorite);
+}
+void MainWindow::writeFavorite(QString word,QString pair,bool saved){
+    const auto key=identity(word,pair);if(favoriteWrites.contains(key))return;
+    favoriteWrites.insert(key);if(identity(currentEntry.value("Word").toString(),currentEntry.value("Pair").toString())==key){++favoriteRevision;star->setEnabled(false);}
+    auto db=database;++pendingWrites;
+    background(this,[db,word,pair,saved]()mutable{db.setFavorite(word,pair,saved);return true;},[this,key,saved](bool){
+        favoriteWrites.remove(key);writeFinished();dirty();
+        if(!currentEntry.isEmpty()&&identity(currentEntry.value("Word").toString(),currentEntry.value("Pair").toString())==key){++favoriteRevision;favorite=saved;star->setIcon(vectorIcon(saved?"star-filled":"star",QColor("#8A67C1")));star->setEnabled(true);}
+        if(pages->currentIndex()==1)refreshBook();
+    },[this,key](QString e){favoriteWrites.remove(key);writeFinished();if(identity(currentEntry.value("Word").toString(),currentEntry.value("Pair").toString())==key){++favoriteRevision;refreshFavoriteState();}toast(e,true);if(pages->currentIndex()==1)refreshBook();});
 }
 
 void MainWindow::refreshBook(){
@@ -475,7 +520,7 @@ void MainWindow::refreshBook(){
         if(padding.size()==2){left=right=qBound(0,padding[0].toInt(),30);top=bottom=qBound(0,padding[1].toInt(),30);}
         else if(padding.size()==4){left=qBound(0,padding[0].toInt(),30);top=qBound(0,padding[1].toInt(),30);right=qBound(0,padding[2].toInt(),30);bottom=qBound(0,padding[3].toInt(),30);}
         for(const auto &row:page.rows){
-            auto *item=new QListWidgetItem;item->setData(Qt::UserRole,row.id);
+            auto *item=new QListWidgetItem;item->setData(Qt::UserRole,row.id);item->setData(Qt::UserRole+1,row.word);item->setData(Qt::UserRole+2,row.pair);
             auto *widget=new QWidget;widget->setObjectName("bookRow");widget->setStyleSheet("QWidget#bookRow{background:transparent;}");
             auto *rowLayout=new QHBoxLayout(widget);rowLayout->setContentsMargins(left,top,right,bottom);rowLayout->setSpacing(5);
             auto *text=new QWidget;auto *textLayout=new QVBoxLayout(text);textLayout->setContentsMargins(0,0,0,0);textLayout->setSpacing(0);
@@ -496,8 +541,7 @@ void MainWindow::refreshBook(){
     },[this,revision](QString e){if(revision==bookRevision)toast(e,true);});
 }
 void MainWindow::setRowFavorite(BookRow row){
-    if(!initialized||pendingClose)return;auto db=database;++pendingWrites;
-    background(this,[db,row]()mutable{db.setFavorite(row.word,row.pair,!row.favorite);return true;},[this,row](bool){writeFinished();dirty();refreshBook();if(identity(currentEntry.value("Word").toString(),currentEntry.value("Pair").toString())==identity(row.word,row.pair)){favorite=!row.favorite;star->setIcon(vectorIcon(favorite?"star-filled":"star",QColor("#8A67C1")));}},[this](QString e){writeFinished();toast(e,true);refreshBook();});
+    if(!initialized||pendingClose)return;writeFavorite(row.word,row.pair,!row.favorite);
 }
 void MainWindow::removeRow(BookRow row){
     if(!initialized||pendingClose)return;
@@ -522,7 +566,14 @@ void MainWindow::runSync(bool pullOnly){
     if(settings.databasePath()!=database.path()){toast(QStringLiteral("请重新启动，应用新用户身份后再同步。"),true);return;}
     syncing=true;sync->setEnabled(false);sync->setText(QStringLiteral("同步中"));QString directory=settings.directory,dbPath=database.path(),user=activeUsername;QJsonObject config=settings.data;const auto generation=dirtyGeneration;syncCanceled=std::make_shared<std::atomic_bool>(false);auto canceled=syncCanceled;
     struct Synced{QString message;bool pending=false;};
-    background(this,[directory,config,dbPath,user,pullOnly,canceled]{auto message=CacheSync::run(directory,config,dbPath,user,pullOnly,canceled);Database db(dbPath,user);return Synced{message,db.revision()>db.syncedRevision()};},[this,generation](Synced result){syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("同步"));if(result.pending||generation!=dirtyGeneration){if(!firstDirtyAt)dirty();}else firstDirtyAt=0;toast(result.message.isEmpty()?QStringLiteral("同步完成"):result.message);refreshBook();updateHistory();if(!currentEntry.isEmpty()){auto db=database;auto entry=currentEntry;auto revision=requestId;background(this,[db,entry]{return db.find(entry.value("Word").toString(),entry.value("Pair").toString());},[this,revision](QJsonObject value){if(revision!=requestId)return;if(!value.isEmpty())showEntry(value);else{currentEntry={};selectedPart.clear();star->setEnabled(false);copy->setEnabled(false);showMessage(QStringLiteral("已移除"),QStringLiteral("该词已从同步词库中移除。"));}},[this](QString e){toast(e,true);});}},[this](QString error){syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("重试同步"));toast(QStringLiteral("同步失败：")+error+QStringLiteral("\n本地词库已保存，可点击重试。"),true);});
+    background(this,[directory,config,dbPath,user,pullOnly,canceled]{auto message=CacheSync::run(directory,config,dbPath,user,pullOnly,canceled);Database db(dbPath,user);return Synced{message,db.revision()>db.syncedRevision()};},[this,generation](Synced result){
+        syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("同步"));
+        if(result.pending||generation!=dirtyGeneration){if(!firstDirtyAt)dirty();}else firstDirtyAt=0;
+        toast(result.message.isEmpty()?QStringLiteral("同步完成"):result.message);refreshBook();updateHistory();
+        // Refresh only the chosen source, including a previously empty source
+        // that has just arrived through sync. Do not interrupt a query/debounce.
+        if(!input->text().trimmed().isEmpty()&&!inputDelay->isActive()&&query->text()==QStringLiteral("查询"))lookup(false,false,false,true);
+    },[this](QString error){syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("重试同步"));toast(QStringLiteral("同步失败：")+error+QStringLiteral("\n本地词库已保存，可点击重试。"),true);});
 }
 void MainWindow::exportBook(){
     if(!initialized)return;QString path=QFileDialog::getSaveFileName(this,QStringLiteral("导出单词本"),QDir::homePath()+"/MyDict.csv",QStringLiteral("CSV 文件 (*.csv)"));if(path.isEmpty())return;auto db=database;QString search=filter->text().trimmed();bool only=favoritesOnly->isChecked();

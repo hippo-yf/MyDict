@@ -41,10 +41,11 @@ private:
     QString fontCoverageKey;
     bool needsChineseFallback = false;
     QString selectedPart;
-    quint64 requestId = 0, bookRevision = 0, dirtyGeneration = 0;
+    quint64 requestId = 0, bookRevision = 0, dirtyGeneration = 0, favoriteRevision = 0;
     int pendingWrites = 0, offset = 0, total = 0;
     bool initialized = false, syncing = false, pendingClose = false, favorite = false, savingSettings = false, switchingIdentity = false;
     QSet<QString> removingWords;
+    QSet<QString> favoriteWrites;
     QThread networkThread;
     OnlineService *online = nullptr;
     QWidget *titleBar = nullptr;
@@ -69,19 +70,25 @@ private:
     void applySettings(bool restoreWindow = false);
     void updateFonts(bool includePhonetic);
     void showMessage(const QString &title, const QString &message);
+    void showSourcePlaceholder(const QString &word, bool loading = false);
+    void showSelection(const HistorySelection &selection);
     void persistWindow();
     void reloadConfig();
     void requestIdentityChange();
     void changeIdentity();
     void updateDeepSeek();
     bool useDeepSeek() const;
-    void lookup(bool force, bool manual, bool link = false);
+    void lookup(bool force, bool manual, bool link = false, bool cacheOnly = false);
     void launchOnline(quint64 revision, const QString &text, bool ai);
     void showEntry(const QJsonObject &entry, bool refreshFavorite = true);
+private slots:
     void receiveEntry(quint64 revision, QJsonObject entry);
+private:
     void updateHistory();
     void navigate(int direction);
     void favoriteCurrent();
+    void refreshFavoriteState();
+    void writeFavorite(QString word, QString pair, bool saved);
     void refreshBook();
     void setRowFavorite(BookRow row);
     void removeRow(BookRow row);

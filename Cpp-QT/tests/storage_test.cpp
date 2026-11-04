@@ -9,6 +9,12 @@
 #include <QJsonArray>
 #include <QUuid>
 #include <QtConcurrent>
+#include <QDir>
+#ifdef Q_OS_WIN
+#include <QtCore/qt_windows.h>
+#include <QThread>
+#include <thread>
+#endif
 #include <functional>
 #include <stdexcept>
 
@@ -91,6 +97,60 @@ private slots:
         QCOMPARE(s.username(), user); QCOMPARE(s.data["_personal_note"].toString(), QString("preserved"));
         QVERIFY(QFileInfo::exists(s.path + ".bak"));
     }
+    void settingsWindowsShortSharingLocksAreRetried() {
+#ifdef Q_OS_WIN
+        // Cover both atomic replacements: the live file and the backup. These
+        // real Win32 readers allow reading/writing but deliberately deny delete.
+        for (const auto &suffix : QStringList{QString(), QStringLiteral(".bak")}) {
+            QTemporaryDir temp; QVERIFY(temp.isValid()); Settings settings(temp.path()); settings.load();
+            settings.data["_lock_revision"] = "before"; settings.save();
+            const auto original = bytes(settings.path);
+            const auto user = settings.username(), device = settings.data["CacheSync"].toObject()["DeviceId"].toString();
+            const auto lockedPath = QDir::toNativeSeparators(settings.path + suffix);
+            HANDLE locked = CreateFileW(reinterpret_cast<LPCWSTR>(lockedPath.utf16()), GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            QVERIFY2(locked != INVALID_HANDLE_VALUE, qPrintable(QString("CreateFileW failed: %1").arg(GetLastError())));
+            std::thread release([locked] { QThread::msleep(20); CloseHandle(locked); });
+            settings.data["_lock_revision"] = "after";
+            QString error;
+            try { settings.save(); } catch (const std::exception &e) { error = QString::fromUtf8(e.what()); }
+            release.join();
+            QVERIFY2(error.isEmpty(), qPrintable(error));
+            QCOMPARE(bytes(settings.path + ".bak"), original);
+            Settings restored(temp.path()); restored.load();
+            QCOMPARE(restored.data["_lock_revision"].toString(), QString("after"));
+            QCOMPARE(restored.username(), user); QCOMPARE(restored.data["CacheSync"].toObject()["DeviceId"].toString(), device);
+            QCOMPARE(QJsonDocument::fromJson(bytes(settings.path + ".bak")).object()["username"].toString(), user);
+            QVERIFY(!settings.reload());
+        }
+#else
+        QSKIP("FILE_SHARE_DELETE behavior requires Windows.");
+#endif
+    }
+    void settingsWindowsPermanentSharingLockPreservesOriginal() {
+#ifdef Q_OS_WIN
+        QTemporaryDir temp; QVERIFY(temp.isValid()); Settings settings(temp.path()); settings.load();
+        settings.data["_lock_revision"] = "before"; settings.save();
+        const auto original = bytes(settings.path);
+        const auto user = settings.username();
+        const auto lockedPath = QDir::toNativeSeparators(settings.path);
+        HANDLE locked = CreateFileW(reinterpret_cast<LPCWSTR>(lockedPath.utf16()), GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        QVERIFY2(locked != INVALID_HANDLE_VALUE, qPrintable(QString("CreateFileW failed: %1").arg(GetLastError())));
+        settings.data["_lock_revision"] = "not saved";
+        QString error;
+        try { settings.save(); } catch (const std::exception &e) { error = QString::fromUtf8(e.what()); }
+        CloseHandle(locked);
+        const auto prefix = QStringLiteral("保存 settings.json 失败，原文件已保留。");
+        QVERIFY2(error.startsWith(prefix), qPrintable(error)); QVERIFY(error.size() > prefix.size() + 1);
+        QCOMPARE(bytes(settings.path), original); QCOMPARE(bytes(settings.path + ".bak"), original);
+        QVERIFY(!settings.reload());
+        Settings restored(temp.path()); restored.load();
+        QCOMPARE(restored.username(), user); QCOMPARE(restored.data["_lock_revision"].toString(), QString("before"));
+#else
+        QSKIP("FILE_SHARE_DELETE behavior requires Windows.");
+#endif
+    }
     void latestBodyAiSummaryAndMetadataPagination() {
         QTemporaryDir temp; Database db(temp.filePath("words.sqlite"), "tester"); db.initialize();
         db.store(entry("civil", "AI summary", "2026-01-01T00:00:00.0000001Z", true));
@@ -106,6 +166,69 @@ private slots:
         sql(db.path(), [](QSqlDatabase &connection) { QSqlQuery q(connection); QVERIFY(q.exec("UPDATE sources SET payload=x'00'")); });
         QCOMPARE(db.page("", false, 0).total, 1);
         QVERIFY_EXCEPTION_THROWN(db.get(first.rows.first().id), std::runtime_error);
+    }
+    void selectedSourceGroupsAreStrictAndKeepAiBookSummary() {
+        QTemporaryDir temp; Database db(temp.filePath("words.sqlite"), "tester"); db.initialize();
+        QVERIFY(db.findForSource("civil", "en|zh-CN", false).isEmpty());
+        QVERIFY(db.findForSource("civil", "en|zh-CN", true).isEmpty());
+        db.store(entry("civil", "AI original", "2026-01-01T00:00:00.0000001Z", true), false);
+        db.store(entry("civil", "MyMemory", "2026-01-01T00:00:00.0000002Z"), false);
+        auto ai = entry("civil", "AI new model", "2026-01-01T00:00:00.0000003Z", true);
+        ai["LookupModel"] = "new-model"; db.store(ai, false);
+        auto online = entry("civil", "LibreTranslate newest", "2026-01-01T00:00:00.0000004Z");
+        online["TranslationProvider"] = "LibreTranslate"; online["TranslationUrl"] = "https://example.invalid/translate"; db.store(online, false);
+        QCOMPARE(db.findForSource(" CIVIL ", "en|zh-CN", true)["Summary"].toString(), QString("AI new model"));
+        QCOMPARE(db.findForSource("civil", "en|zh-CN", false)["Summary"].toString(), QString("LibreTranslate newest"));
+        QCOMPARE(db.find("civil", "en|zh-CN")["Summary"].toString(), QString("LibreTranslate newest"));
+        QVERIFY(db.findForSource("civil", "zh-CN|en", false).isEmpty());
+        const auto page = db.page("civil", false, 0);
+        QCOMPARE(page.total, 1); QCOMPARE(page.rows.first().summary, QString("AI new model"));
+        QVERIFY(page.rows.first().hasAi && page.rows.first().hasOnline);
+        db.store(entry("ai-only", "AI only", "2026-01-01T00:00:00Z", true), false);
+        db.store(entry("online-only", "online only", "2026-01-01T00:00:00Z"), false);
+        QVERIFY(db.findForSource("ai-only", "en|zh-CN", false).isEmpty());
+        QVERIFY(db.findForSource("online-only", "en|zh-CN", true).isEmpty());
+        // Looking at Online must not deserialize even a broken AI payload.
+        sql(db.path(), [](QSqlDatabase &connection) { QSqlQuery q(connection); QVERIFY(q.exec("UPDATE sources SET payload=x'00' WHERE is_ai=1")); });
+        QCOMPARE(db.findForSource("civil", "en|zh-CN", false)["Summary"].toString(), QString("LibreTranslate newest"));
+        QVERIFY_EXCEPTION_THROWN(db.findForSource("civil", "en|zh-CN", true), std::runtime_error);
+    }
+    void selectedSourceHistoryRetainsWordsAndRestoresCursor() {
+        QTemporaryDir temp; Database db(temp.filePath("words.sqlite"), "tester"); db.initialize();
+        auto selected = db.navigateForSource(0, true);
+        QVERIFY(selected.word.isEmpty()); QVERIFY(selected.pair.isEmpty()); QVERIFY(selected.entry.isEmpty());
+        db.store(entry("civil", "AI civil", "2026-01-01T00:00:00.0000001Z", true));
+        db.store(entry("civil", "online civil", "2026-01-01T00:00:00.0000002Z"));
+        db.store(entry("ai-only", "AI only", "2026-01-01T00:00:00Z", true));
+        db.store(entry("online-only", "online only", "2026-01-01T00:00:00Z"));
+        selected = db.navigateForSource(0, true);
+        QCOMPARE(selected.word, QString("online-only")); QCOMPARE(selected.pair, QString("en|zh-CN")); QVERIFY(selected.entry.isEmpty());
+        QVERIFY(db.canNavigate(-1)); QVERIFY(!db.canNavigate(1));
+        Database restored(db.path(), "tester");
+        selected = restored.navigateForSource(0, false);
+        QCOMPARE(selected.word, QString("online-only")); QCOMPARE(selected.entry["Summary"].toString(), QString("online only"));
+        selected = restored.navigateForSource(-1, false);
+        QCOMPARE(selected.word, QString("ai-only")); QCOMPARE(selected.pair, QString("en|zh-CN")); QVERIFY(selected.entry.isEmpty());
+        selected = db.navigateForSource(0, true);
+        QCOMPARE(selected.word, QString("ai-only")); QCOMPARE(selected.entry["Summary"].toString(), QString("AI only"));
+        // Both civil history positions honor the selected group, independently
+        // of the source originally recorded at that particular position.
+        selected = db.navigateForSource(-1, true);
+        QCOMPARE(selected.word, QString("civil")); QCOMPARE(selected.entry["Summary"].toString(), QString("AI civil"));
+        selected = db.navigateForSource(-1, false);
+        QCOMPARE(selected.word, QString("civil")); QCOMPARE(selected.entry["Summary"].toString(), QString("online civil"));
+        QVERIFY(!db.canNavigate(-1)); QVERIFY(db.canNavigate(1));
+        QCOMPARE(db.navigateForSource(-1, false).entry["Summary"].toString(), QString("online civil"));
+        QCOMPARE(db.navigateForSource(1, true).entry["Summary"].toString(), QString("AI civil"));
+        // Original navigation still returns its established latest-body result.
+        QCOMPARE(db.navigate(0)["Summary"].toString(), QString("online civil"));
+        sql(db.path(), [](QSqlDatabase &connection) { QSqlQuery q(connection); QVERIFY(q.exec("SELECT COUNT(*) FROM history")); QVERIFY(q.next()); QCOMPARE(q.value(0).toInt(), 4); });
+        // The history's original AI source is only an identity join: a corrupt
+        // unselected payload must not prevent displaying the Online source.
+        db.navigateForSource(-1, false);
+        sql(db.path(), [](QSqlDatabase &connection) { QSqlQuery q(connection); QVERIFY(q.exec("UPDATE sources SET payload=x'00' WHERE is_ai=1")); });
+        selected = restored.navigateForSource(0, false);
+        QCOMPARE(selected.word, QString("civil")); QCOMPARE(selected.entry["Summary"].toString(), QString("online civil"));
     }
     void pageFilterLimitAndExport() {
         QTemporaryDir temp; Database db(temp.filePath("words.sqlite"), "tester"); db.initialize();

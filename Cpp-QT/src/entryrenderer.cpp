@@ -151,7 +151,7 @@ public:
         for (auto value : meanings) { QString part = value.toObject().value("PartOfSpeech").toString(); if (!parts.contains(part)) parts << part; }
         QString out = "<html><body style=\"margin:4px;\">";
         if (!parts.isEmpty()) {
-            out += "<table cellspacing=\"0\" cellpadding=\"5\" bgcolor=\"" + clr("#E2F1E0") + "\"><tr>";
+            out += "<table cellspacing=\"0\" cellpadding=\"7\" bgcolor=\"" + clr("#E2F1E0") + "\"><tr>";
             for (const auto &part : parts + QStringList{"All"}) {
                 const bool active = part == selectedPart || (part == "All" && selectedPart.isEmpty());
                 out += "<td bgcolor=\"" + QString(active ? "#4E8848" : "#A9D6A5") + "\"><a href=\"pos:" + escape(QString::fromLatin1(QUrl::toPercentEncoding(part == "All" ? QString() : part))) + "\" style=\"font-size:" + QString::number(14 * scale) + "px;color:" + (active ? "#FFFFFF" : "#315E35") + ";text-decoration:none;font-weight:bold\">" + escape(part == "All" ? part : englishPart(part)) + "</a></td><td width=\"3\"></td>";

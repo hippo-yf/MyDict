@@ -23,6 +23,7 @@
 #include <QTextLayout>
 #include <QWindow>
 #include <QtMath>
+#include <exception>
 
 using namespace MyDict;
 
@@ -164,7 +165,7 @@ private slots:
         report.insert("scaleFactorEnvironment",qEnvironmentVariable("QT_SCALE_FACTOR"));report.insert("screenScaleFactorsEnvironment",qEnvironmentVariable("QT_SCREEN_SCALE_FACTORS"));
         report.insert("qtVersion",qVersion());report.insert("fontSource",fontDirectory());
     }
-    void realWindowAndFaces() {
+    void realWindowAndFaces() {try {
         QTemporaryDir temp;QVERIFY(temp.isValid());const QString directory=QDir(temp.path()).filePath("fonts");QVERIFY(QDir().mkpath(directory));
         const QDir source(fontDirectory());auto names=source.entryList({"CaskaydiaCoveNerdFontPropo-*.ttf"},QDir::Files,QDir::Name);QCOMPARE(names.size(),4);
         names<<"NotoSansSC-Variable.ttf";QStringList expected;
@@ -260,7 +261,9 @@ private slots:
         QVERIFY(visibleGlyphs(window,browser,"restored"));QVERIFY(screenshot(window,"restored-window"));
         QCOMPARE(documentFont(browser,"To move quickly on foot.").pixelSize(),report.value("standardDefinitionPixelSize").toInt());
         QVERIFY(window.close());QTRY_VERIFY(!window.isVisible());completed=true;
-    }
+    } catch(const std::exception &error) {
+        QFAIL(error.what());
+    }}
     void cleanupTestCase() {
         report.insert("completed",completed);report.insert("registeredFilesAtEnd",QJsonArray::fromStringList(AppFonts::loadedFiles()));
         QFile file(QDir(output).filePath("report.json"));QVERIFY(file.open(QIODevice::WriteOnly));QVERIFY(file.write(QJsonDocument(report).toJson(QJsonDocument::Indented))>0);

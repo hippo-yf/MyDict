@@ -61,7 +61,7 @@
     "ShowExamples": "是否显示词典例句：true 显示，false 隐藏。",
     "ShowDerived": "是否显示派生词及搭配：true 显示，false 隐藏。",
     "Window": "上次关闭时保存的窗口位置、大小及最大化状态；一般由程序自动维护。",
-    "DeepSeek": "DeepSeek 查询开关、密钥、接口地址和模型。启用后输入只读缓存，查询按钮、回车或点击未缓存释义词时才调用 API；密钥各设备单独配置，不随词库同步。",
+    "DeepSeek": "DeepSeek 查询选项、密钥、接口地址和模型。Qt 的来源按钮同时选择查询及正文显示来源；DeepSeek 模式输入只读缓存，查询按钮、回车或点击未缓存释义词时才调用 API。密钥各设备单独配置，不随词库同步。",
     "Styles": "按用途分组的显示样式；只修改样式键的值，保存后自动重新加载。未填写的键使用内置默认值。",
     "_说明": "中文使用说明，不参与程序配置；可修改说明文字。JSON 不支持 // 注释。",
     "_配置版本": "配置排版版本，请保持为 3。",
@@ -76,7 +76,7 @@
     "TimeoutSeconds": 90,
     "MaxTokens": 8192,
     "_说明": {
-      "Enabled": "是否启用 DeepSeek。输入只读缓存；按钮、回车或点击未缓存释义词才联网。已有该词 DeepSeek 结果时，手动更新前需要确认。",
+      "Enabled": "true 使用 DeepSeek，false 使用普通在线词典；Qt 的查询和正文显示均遵循该来源选择。DeepSeek 输入只读缓存；按钮、回车或点击未缓存释义词才联网。已有其释义时，手动更新前需要确认。",
       "ApiKey": "DeepSeek API 密钥，保存在本地 JSON 中，请勿公开。",
       "Endpoint": "完整 HTTPS Chat Completions 接口地址，默认 https://api.deepseek.com/chat/completions。",
       "Model": "模型名称，默认 deepseek-flash；可按服务提供方文档修改。",

@@ -33,6 +33,7 @@ struct BookRow {
     bool favorite = false, hasAi = false, hasOnline = false;
 };
 struct BookPage { QList<BookRow> rows; int total = 0; };
+struct HistorySelection { QString word, pair; QJsonObject entry; };
 
 // Each operation opens an independent SQLite connection in its caller's thread.
 // This value type may safely be captured by background jobs.
@@ -42,6 +43,8 @@ public:
     QString path() const;
     void initialize();
     QJsonObject find(QString word, QString pair) const;
+    // A missing selected source never falls back to the other source group.
+    QJsonObject findForSource(QString word, QString pair, bool deepSeek) const;
     QJsonObject findDeepSeek(QString word, QString pair) const;
     QJsonObject get(qint64 id) const;
     bool hasDeepSeek(QString word, QString pair) const;
@@ -53,6 +56,8 @@ public:
     bool remove(qint64 id);
     BookPage page(QString filter, bool favoritesOnly, int offset, int limit = 50) const;
     QJsonObject navigate(int direction);
+    // Keep the history word even when its selected source has not been cached.
+    HistorySelection navigateForSource(int direction, bool deepSeek);
     bool canNavigate(int direction) const;
     void exportCsv(QString path, QString filter, bool favoritesOnly) const;
     // Streamed NDJSON mydict-portable-v1, emitted by Export-Legacy.cs.
