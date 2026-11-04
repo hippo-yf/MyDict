@@ -74,13 +74,13 @@ class CrossClientCacheTests
    Run(tool,"--data-dir "+Quote(qt)+" --import-json "+Quote(updates)+" --sync",folder,plugins);
    sync.ExchangeDatabaseAsync(cs,new string('a',32),true).GetAwaiter().GetResult();
    Check(cs.Find("qt-word","en|zh-CN").Entry.Record.Derived=="runner 跑步者"&&cs.IsFavorite("qt-word","en|zh-CN"),"C# did not read a Qt-created entry/favorite.");
-   Check(!cs.IsFavorite("run","en|zh-CN")&&cs.Find("remove-me","en|zh-CN")==null,"Qt favorite/deletion events did not converge in C#.");
+   Check(!cs.IsFavorite("run","en|zh-CN")&&cs.Find("remove-me","en|zh-CN")!=null,"Qt favorite update or append-only cache retention failed in C#.");
    Run(tool,"--data-dir "+Quote(qt)+" --sync",folder,plugins);
-   Check(qtDb.Find("remove-me","en|zh-CN")==null&&!qtDb.IsFavorite("run","en|zh-CN"),"Deleted/unfavorited word revived after another exchange.");
+   Check(qtDb.Find("remove-me","en|zh-CN")!=null&&!qtDb.IsFavorite("run","en|zh-CN"),"Cached word was lost or canceled favorite revived after another exchange.");
    Check(originalHash.SequenceEqual(FileHash(legacy)),"Original binary snapshot was modified.");
    string tree=Git(csRepo,"ls-tree -r --name-only origin/main");Check(tree.Contains("users/"+User+"/shared/cs-")&&tree.Contains("users/"+User+"/shared/qt-")&&!tree.Contains(".json"),"Clients did not share the same SQLite namespace.");
    Check(cs.IntegrityCheck()=="ok"&&qtDb.IntegrityCheck()=="ok","Cross-client database integrity failed.");
-   Console.WriteLine("PASS: real C# -> Git -> Qt -> Git -> C# shared cache, binary bridge, rich bilingual records, favorites, deletion convergence, preserved originals, SQLite-only snapshots");return 0;
+   Console.WriteLine("PASS: real C# -> Git -> Qt -> Git -> C# shared cache, binary bridge, rich bilingual records, favorites, ignored legacy deletion markers, preserved originals, SQLite-only snapshots");return 0;
   }catch(Exception e){Console.Error.WriteLine(e);return 1;}
   finally{foreach(var file in Directory.GetFiles(folder,"*",SearchOption.AllDirectories))File.SetAttributes(file,FileAttributes.Normal);Directory.Delete(folder,true);}
  }
