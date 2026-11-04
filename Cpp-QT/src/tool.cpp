@@ -1,4 +1,5 @@
 #include "core.h"
+#include "dailyword.h"
 #include "importer.h"
 #include "sync.h"
 #include <QCoreApplication>
@@ -8,6 +9,7 @@
 #include <QStandardPaths>
 #include <QJsonObject>
 #include <stdexcept>
+#include <cstdio>
 
 int main(int argc,char **argv) {
     QCoreApplication app(argc,argv); Q_INIT_RESOURCE(resources);
@@ -24,6 +26,7 @@ int main(int argc,char **argv) {
     p.addOption({"force-refresh",QStringLiteral("忽略已有 DeepSeek 缓存，重新付费查询")});
     p.addOption({"dry-run",QStringLiteral("仅预览词本，不调用 API")});
     p.addOption({"favorites-only",QStringLiteral("CSV 仅导出收藏")});
+    p.addOption({"daily-word",QStringLiteral("生成或读取今日词汇（使用已配置 DeepSeek）")});
     p.addOption({"check",QStringLiteral("检查数据库并显示词条数")});
     p.addOption({"sync",QStringLiteral("手动同步 Qt SQLite 快照")});
     p.process(app);
@@ -45,11 +48,12 @@ int main(int argc,char **argv) {
             return MyDict::importWordbook(db,settings.data,o);
         }
         db.initialize();
+        if(p.isSet("daily-word")){auto article=MyDict::DailyWord::generate(db,settings.data,std::make_shared<std::atomic_bool>(false));article=MyDict::DailyWord::enrichSummary(db,article,settings.data,std::make_shared<std::atomic_bool>(false));article=MyDict::DailyWord::enrichImage(db,article,settings.data,std::make_shared<std::atomic_bool>(false));fprintf(stdout,"Daily word: %s %s\n",qPrintable(article.value("Date").toString()),qPrintable(article.value("Word").toString()));return 0;}
         if(p.isSet("import-json")) {db.importEntries(p.value("import-json"));qInfo()<<"Import complete.";}
         if(p.isSet("export-csv")) {db.exportCsv(p.value("export-csv"),{},p.isSet("favorites-only"));qInfo()<<"Export complete.";}
         if(p.isSet("sync")) qInfo().noquote()<<MyDict::CacheSync::run(settings.directory,settings.data,db.path(),settings.username(),false);
         if(p.isSet("check")) qInfo().noquote()<<QStringLiteral("Qt SQLite 词条：%1；收藏：%2；revision：%3").arg(db.page({},false,0,1).total).arg(db.page({},true,0,1).total).arg(db.revision());
         if(!p.isSet("check")&&!p.isSet("import-json")&&!p.isSet("export-csv")&&!p.isSet("sync")) p.showHelp();
         return 0;
-    }catch(const std::exception &e){qCritical().noquote()<<QString::fromUtf8(e.what());return 1;}
+    }catch(const std::exception &e){fprintf(stderr,"%s\n",e.what());return 1;}
 }

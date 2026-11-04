@@ -17,6 +17,7 @@
 #endif
 #include <functional>
 #include <stdexcept>
+#include <cmath>
 
 using namespace MyDict;
 
@@ -33,6 +34,15 @@ QString ndjson(QTemporaryDir &temp, const QList<QJsonObject> &items) {
     QFile file(path); if (!file.open(QIODevice::WriteOnly)) return {};
     for (const auto &item : items) { file.write(QJsonDocument(item).toJson(QJsonDocument::Compact)); file.write("\n"); }
     return path;
+}
+QJsonObject exampleEntry(QString word, const QStringList &sentences, QJsonObject forms = {}) {
+    auto result = entry(word, word + " meaning", "2026-11-04T00:00:00Z", true);
+    QJsonArray examples;
+    for (const auto &sentence : sentences) examples.append(QJsonObject{{"Text", sentence}});
+    const QJsonObject sense{{"Examples", examples}};
+    const QJsonObject meaning{{"Senses", QJsonArray{sense}}};
+    result.insert("Record", QJsonObject{{"Forms", forms}, {"Meanings", QJsonArray{meaning}}});
+    return result;
 }
 QJsonObject header(QString user = "tester") { return {{"format", "mydict-portable-v1"}, {"username", user}}; }
 void sql(QString path, const std::function<void(QSqlDatabase &)> &action) {
@@ -61,6 +71,167 @@ void makeOldQtSnapshot(QString path) {
 class StorageTest : public QObject {
     Q_OBJECT
 private slots:
+    void wordbookOrdersByReviewWeightAcrossPages() {
+        QTemporaryDir temp;
+        Database db(temp.filePath("words.sqlite"), "tester");
+        db.initialize();
+        for (const auto &word : QStringList{"apple", "pear", "book", "run"})
+            db.store(entry(word, word + " meaning", "2026-11-04T00:00:00Z"));
+        db.setFavorite("apple", "en|zh-CN", true);
+        auto question = db.reviewQuestion();
+        QVERIFY(db.answerReview(question, -1));
+        QCOMPARE(db.page("", false, 0, 1).rows.first().word, QString("apple"));
+        QVERIFY(db.page("", false, 1, 1).rows.first().word != "apple");
+        QCOMPARE(db.page("app", false, 0).rows.first().word, QString("apple"));
+        QCOMPARE(db.page("", true, 0).rows.first().word, QString("apple"));
+        question = db.reviewQuestion();
+        QVERIFY(db.answerReview(question, question.correctIndex));
+        QCOMPARE(db.page("", false, 3, 1).rows.first().word, QString("apple"));
+        QCOMPARE(db.page("", false, 0).total, 4);
+        sql(db.path(), [&](QSqlDatabase &connection) {
+            QSqlQuery q(connection);
+            QVERIFY(q.exec("DROP TRIGGER remove_review_weight"));
+            QVERIFY(q.exec("DROP TABLE review_weights"));
+        });
+        QCOMPARE(db.page("", false, 0).rows.size(), 4);
+    }
+
+    void clozeUsesWholeWordsFormsAndLegacyExamples() {
+        struct Case { QString word; QStringList examples; QJsonObject forms; QString sentence, answer; };
+        const QList<Case> cases{
+            {"run", {"The runner is here.", "He ran yesterday.", "They run and she ran."},
+                {{"Past", "ran"}}, "He ____ yesterday.", "ran"},
+            {"run", {"Run, run!"}, {}, "____, ____!", "Run"},
+            {"take off", {"Planes take off at noon."}, {}, "Planes ____ at noon.", "take off"}
+        };
+        for (const auto &test : cases) {
+            QTemporaryDir temp;
+            Database db(temp.filePath("words.sqlite"), "tester");
+            db.initialize();
+            db.saveFavorite(exampleEntry(test.word, test.examples, test.forms));
+            db.saveFavorite(exampleEntry("missing", {"This sentence has no target."}));
+            for (const auto &other : QStringList{"eat", "read", "sleep"})
+                db.store(entry(other, other, "2026-11-04T00:00:00Z"));
+            const auto question = db.reviewQuestion(true);
+            QCOMPARE(question.word, test.word);
+            QCOMPARE(question.sentence, test.sentence);
+            QCOMPARE(question.options.at(question.correctIndex), test.answer);
+            QCOMPARE(question.options.size(), 4);
+            QVERIFY(db.answerReview(question, -1));
+        }
+        QTemporaryDir temp;
+        Database db(temp.filePath("words.sqlite"), "tester");
+        db.initialize();
+        db.saveFavorite(exampleEntry("run", {"No usable example."}));
+        auto online = entry("run", "run meaning", "2026-11-05T00:00:00Z");
+        online.insert("Record", QJsonObject{{"Meanings", QJsonArray{QJsonObject{{"Senses", QJsonArray{
+            QJsonObject{{"Example", "They run daily."}}}}}}}});
+        db.store(online);
+        for (const auto &other : QStringList{"eat", "read", "sleep"})
+            db.store(entry(other, other, "2026-11-04T00:00:00Z"));
+        QCOMPARE(db.reviewQuestion(true).sentence, QString("They ____ daily."));
+        db.setFavorite("run", "en|zh-CN", false);
+        QVERIFY_EXCEPTION_THROWN(db.reviewQuestion(true), std::runtime_error);
+    }
+
+    void earlierClozeExamplesAreMoreLikely() {
+        QTemporaryDir temp;
+        Database db(temp.filePath("words.sqlite"), "tester");
+        db.initialize();
+        db.saveFavorite(exampleEntry("run", {"They run every day.", "I run home."}));
+        for (const auto &other : QStringList{"eat", "read", "sleep"})
+            db.store(entry(other, other, "2026-11-04T00:00:00Z"));
+        int first = 0;
+        for (int i = 0; i < 2400; ++i) {
+            const auto question = db.reviewQuestion(true);
+            QCOMPARE(question.options.at(question.correctIndex), QString("run"));
+            if (question.sentence.startsWith("They")) ++first;
+        }
+        // Expected 1600 with 1 : 1/2 weighting; wide bounds avoid flaky tests.
+        QVERIFY2(first > 1400 && first < 1800, qPrintable(QString::number(first)));
+    }
+
+    void reviewWeightsPersistAndSampleFavorites() {
+        QTemporaryDir temp;
+        Database db(temp.filePath("words.sqlite"), "tester");
+        db.initialize();
+        const QString at = "2026-11-04T00:00:00Z";
+        db.saveFavorite(entry("apple", QStringLiteral("苹果"), at));
+        db.store(entry("pear", QStringLiteral("梨"), at));
+        db.store(entry("book", QStringLiteral("书"), at));
+        db.store(entry("run", QStringLiteral("跑步"), at));
+        db.store(entry("duplicate", QStringLiteral(" 苹果 "), at));
+        auto question = db.reviewQuestion();
+        QCOMPARE(question.word, QString("apple"));
+        QCOMPARE(question.options.size(), 4);
+        QCOMPARE(question.options.at(question.correctIndex), QStringLiteral("苹果"));
+        QCOMPARE(QSet<QString>(question.options.begin(), question.options.end()).size(), 4);
+        auto weight = [&] {
+            double logarithm = 0;
+            sql(db.path(), [&](QSqlDatabase &connection) {
+                QSqlQuery q(connection);
+                QVERIFY(q.exec("SELECT log_weight FROM review_weights"));
+                if (q.next()) logarithm = q.value(0).toDouble();
+            });
+            return std::exp(logarithm);
+        };
+        QCOMPARE(weight(), 1.0);
+        const auto revision = db.revision();
+        QVERIFY(db.answerReview(question, (question.correctIndex + 1) % 4));
+        QVERIFY(std::abs(weight() - 1.3) < 1e-12);
+        QVERIFY(db.answerReview(question, (question.correctIndex + 1) % 4));
+        QVERIFY(std::abs(weight() - 1.3) < 1e-12);
+        question = db.reviewQuestion();
+        QVERIFY(db.answerReview(question, question.correctIndex));
+        QVERIFY(std::abs(weight() - .91) < 1e-12);
+        QCOMPARE(db.revision(), revision);
+        Database reopened(db.path(), "tester");
+        reopened.initialize();
+        QVERIFY(std::abs(weight() - .91) < 1e-12);
+        question = db.reviewQuestion();
+        QVERIFY(db.answerReview(question, -1));
+        QVERIFY(std::abs(weight() - 1.183) < 1e-12);
+        QVERIFY(db.answerReview(question, -1));
+        QVERIFY(std::abs(weight() - 1.183) < 1e-12);
+        db.setFavorite("pear", "en|zh-CN", true);
+        sql(db.path(), [&](QSqlDatabase &connection) {
+            QSqlQuery q(connection);
+            QVERIFY(q.exec("UPDATE review_weights SET log_weight=1000"));
+        });
+        for (int i = 0; i < 8; ++i) QCOMPARE(db.reviewQuestion().word, QString("apple"));
+        db.setFavorite("apple", "en|zh-CN", false);
+        QVERIFY(!db.answerReview(question, question.correctIndex));
+        QCOMPARE(db.reviewQuestion().word, QString("pear"));
+        QVERIFY(!db.remove(question.wordId));
+        sql(db.path(), [&](QSqlDatabase &connection) {
+            QSqlQuery q(connection);
+            QVERIFY(q.exec("SELECT COUNT(*) FROM review_weights"));
+            QVERIFY(q.next());
+            QCOMPARE(q.value(0).toInt(), 1);
+        });
+    }
+
+    void reviewHandlesOldSchemaAndInsufficientChoices() {
+        QTemporaryDir temp;
+        Database db(temp.filePath("words.sqlite"), "tester");
+        db.initialize();
+        sql(db.path(), [&](QSqlDatabase &connection) {
+            QSqlQuery q(connection);
+            QVERIFY(q.exec("DROP TRIGGER remove_review_weight"));
+            QVERIFY(q.exec("DROP TABLE review_weights"));
+        });
+        db.initialize();
+        QVERIFY_EXCEPTION_THROWN(db.reviewQuestion(), std::runtime_error);
+        const QString at = "2026-11-04T00:00:00Z";
+        db.saveFavorite(entry("apple", QStringLiteral("苹果"), at));
+        db.store(entry("pear", QStringLiteral("梨"), at));
+        db.store(entry("book", QStringLiteral("书"), at));
+        db.store(entry("duplicate", QStringLiteral(" 梨 "), at));
+        QVERIFY_EXCEPTION_THROWN(db.reviewQuestion(), std::runtime_error);
+        db.store(entry("run", QStringLiteral("跑步"), at));
+        QCOMPARE(db.reviewQuestion().options.size(), 4);
+    }
+
     void normalizationAndSourceIdentity() {
         QCOMPARE(detectPair("civil"), QString("en|zh-CN"));
         QCOMPARE(detectPair(QString::fromUtf8("晚上")), QString("zh-CN|en"));
@@ -242,43 +413,44 @@ private slots:
         QVERIFY(bytes(csv).startsWith(QByteArray::fromHex("efbbbf")));
         QVERIFY(bytes(csv).contains("word1")); QVERIFY(!bytes(csv).contains("word2"));
     }
-    void favoriteDeleteTombstoneAndStableIds() {
+    void unfavoritePreservesCacheAndStableIds() {
         QTemporaryDir temp; Database db(temp.filePath("words.sqlite"), "tester"); db.initialize();
         auto e = entry("one", "first", "2026-01-01T00:00:00Z"); db.store(e);
         qint64 id = db.page("", false, 0).rows.first().id;
         db.setFavorite("one", "en|zh-CN", true); QVERIFY(!db.remove(id));
-        db.setFavorite("one", "en|zh-CN", false); QVERIFY(db.remove(id));
-        QVERIFY(db.find("one", "en|zh-CN").isEmpty());
-        db.store(e); QVERIFY(db.find("one", "en|zh-CN").isEmpty());
+        db.setFavorite("one", "en|zh-CN", false); QVERIFY(!db.remove(id));
+        QVERIFY(!db.find("one", "en|zh-CN").isEmpty());
+        db.store(e); QVERIFY(!db.find("one", "en|zh-CN").isEmpty());
         db.store(entry("two", "second", "2026-01-01T00:00:00Z"));
-        QVERIFY(db.page("", false, 0).rows.first().id > id);
+        QCOMPARE(db.page("", false, 0).total, 2);
         QVERIFY(!db.remove(id)); // Old rendered-row IDs cannot delete a newly inserted word.
         db.saveFavorite(e); QVERIFY(db.isFavorite("one", "en|zh-CN"));
         QVERIFY(!db.find("one", "en|zh-CN").isEmpty());
     }
-    void navigationAndDeletionCompaction() {
+    void navigationSurvivesRejectedDeletion() {
         QTemporaryDir temp; Database db(temp.filePath("words.sqlite"), "tester"); db.initialize();
         db.store(entry("one", "1", "2026-01-01T00:00:00Z"));
         db.store(entry("two", "2", "2026-01-01T00:00:00Z"));
         db.store(entry("three", "3", "2026-01-01T00:00:00Z"));
         QCOMPARE(db.navigate(-1)["Word"].toString(), QString("two")); QVERIFY(db.canNavigate(-1)); QVERIFY(db.canNavigate(1));
-        auto rows = db.page("two", false, 0); QVERIFY(db.remove(rows.rows.first().id));
-        QCOMPARE(db.navigate(0)["Word"].toString(), QString("one"));
+        auto rows = db.page("two", false, 0); QVERIFY(!db.remove(rows.rows.first().id));
+        QCOMPARE(db.navigate(0)["Word"].toString(), QString("two"));
         QCOMPARE(db.navigate(1)["Word"].toString(), QString("three"));
         QVERIFY(!db.canNavigate(1));
         db.navigate(-1); db.store(entry("four", "4", "2026-01-01T00:00:00Z"));
-        QVERIFY(!db.canNavigate(1)); QCOMPARE(db.navigate(-1)["Word"].toString(), QString("one"));
+        QVERIFY(!db.canNavigate(1)); QCOMPARE(db.navigate(-1)["Word"].toString(), QString("two"));
     }
-    void mergeDeletionAndFavoriteEvents() {
+    void mergeIgnoresDeletionAndKeepsFavoriteEvents() {
         QTemporaryDir temp;
         Database a(temp.filePath("a.sqlite"), "tester"), b(temp.filePath("b.sqlite"), "tester"); a.initialize(); b.initialize();
         auto e = entry("merge", "original", "2026-01-01T00:00:00Z"); a.store(e); b.mergeFrom(a.path());
         QVERIFY(!b.find("merge", "en|zh-CN").isEmpty());
         a.setFavorite("merge", "en|zh-CN", true); b.mergeFrom(a.path()); QVERIFY(b.isFavorite("merge", "en|zh-CN"));
-        a.setFavorite("merge", "en|zh-CN", false); auto row = a.page("", false, 0).rows.first(); QVERIFY(a.remove(row.id));
-        b.mergeFrom(a.path()); QVERIFY(b.find("merge", "en|zh-CN").isEmpty());
-        // Stale snapshots/entries cannot resurrect a deleted word.
-        b.store(e); QVERIFY(b.find("merge", "en|zh-CN").isEmpty());
+        a.setFavorite("merge", "en|zh-CN", false); auto row = a.page("", false, 0).rows.first(); QVERIFY(!a.remove(row.id));
+        sql(a.path(),[](QSqlDatabase &connection){QSqlQuery q(connection);QVERIFY(q.exec("INSERT INTO deleted_words VALUES('merge','en|zh-CN',999999999999999999)"));});
+        b.mergeFrom(a.path()); QVERIFY(!b.find("merge", "en|zh-CN").isEmpty());
+        // Legacy deletion markers must not remove existing cached definitions.
+        b.store(e); QVERIFY(!b.find("merge", "en|zh-CN").isEmpty());
         auto revision = b.revision(); b.mergeFrom(a.path()); QCOMPARE(b.revision(), revision);
         b.saveFavorite(e); a.mergeFrom(b.path()); QVERIFY(a.isFavorite("merge", "en|zh-CN"));
         QString snapshot = temp.filePath("snapshot.sqlite"); a.backupTo(snapshot);
@@ -337,7 +509,7 @@ private slots:
         old.store(keep);old.setFavorite("keep","en|zh-CN",true);
         old.store(entry("other","other","2026-01-01T00:00:00.1234568Z"));
         const auto deleted=entry("deleted","old","2026-01-01T00:00:00Z");old.store(deleted);
-        QVERIFY(old.remove(old.page("deleted",false,0).rows.first().id));old.recordImportError("fixture","old failure");
+        sql(old.path(),[](QSqlDatabase &connection){QSqlQuery q(connection);QVERIFY(q.exec("INSERT INTO deleted_words VALUES('deleted','en|zh-CN',999999999999999999)"));QVERIFY(q.exec("DELETE FROM history WHERE source_key IN (SELECT source_key FROM sources WHERE word_id=(SELECT id FROM words WHERE word='deleted'))"));QVERIFY(q.exec("DELETE FROM sources WHERE word_id=(SELECT id FROM words WHERE word='deleted')"));QVERIFY(q.exec("DELETE FROM words WHERE word='deleted'"));});old.recordImportError("fixture","old failure");
         makeOldQtSnapshot(oldPath);const auto original=bytes(oldPath);
         QVERIFY(Database::isJsonSnapshot(oldPath));QCOMPARE(old.find("keep","en|zh-CN")["Summary"].toString(),QString("AI summary"));
         QVERIFY_EXCEPTION_THROWN(old.initialize(),std::runtime_error);
@@ -346,7 +518,7 @@ private slots:
         Database shared(temp.filePath("words-shared.sqlite"),"tester");shared.initialize();
         QCOMPARE(shared.page({},false,0).total,2);QVERIFY(shared.isFavorite("keep","en|zh-CN"));
         QCOMPARE(shared.navigate(0)["Word"].toString(),QString("other"));QCOMPARE(shared.navigate(-1)["Word"].toString(),QString("keep"));
-        shared.store(deleted);QVERIFY(shared.find("deleted","en|zh-CN").isEmpty());
+        shared.store(deleted,false);QVERIFY(!shared.find("deleted","en|zh-CN").isEmpty());
         sql(shared.path(),[](QSqlDatabase &connection){QSqlQuery q(connection);QVERIFY(q.exec("SELECT value FROM metadata WHERE key='payload_format'"));QVERIFY(q.next());QCOMPARE(q.value(0).toString(),QString("mydict-json-v1"));
             QVERIFY(q.exec("SELECT payload,ticks FROM sources ORDER BY ticks DESC"));QVERIFY(q.next());QVERIFY(q.value(0).toByteArray().startsWith("MYDICT-JSON1\n"));
             QCOMPARE(q.value(1).toLongLong()%10000000,qint64(1234568));QVERIFY(q.exec("SELECT COUNT(*) FROM import_errors"));QVERIFY(q.next());QCOMPARE(q.value(0).toInt(),1);});

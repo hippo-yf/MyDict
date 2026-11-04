@@ -148,13 +148,13 @@ public:
         if (part.startsWith("conj.")) return "conjunction";
         return part;
     }
-    QString render(const QJsonObject &entry, const QString &selectedPart) const {
+    QString render(const QJsonObject &entry, const QString &selectedPart, int portion = 0) const {
         const auto record = entry.value("Record").toObject();
         const auto meanings = record.value("Meanings").toArray();
         QStringList parts;
         for (auto value : meanings) { QString part = value.toObject().value("PartOfSpeech").toString(); if (!parts.contains(part)) parts << part; }
         QString out = "<html><body style=\"margin:4px;\">";
-        if (!parts.isEmpty()) {
+        if (portion == 0 && !parts.isEmpty()) {
             out += "<p style=\"margin:0 0 5px 0;\">";
             bool first=true;
             for(const auto &part:parts+QStringList{"All"}) {
@@ -167,12 +167,15 @@ public:
             }
             out += "</p>";
         }
+        if (portion != 2) {
         out += paragraph("<b>" + escape(entry.value("Word").toString()) + "</b> <span style=\"font-size:" + QString::number(17 * scale) + "px;font-family:'" + font("font.doc.body", "sans-serif") + "';color:" + clr("#008577") + ";\">" + escape(shortTranslation(entry)) + "</span>", 34, clr("#0074CB"), true, {}, 3);
         QString phonetic = record.value("Phonetic").toString();
         if (!phonetic.isEmpty()) out += paragraph(escape(phonetic), 20, clr("#0874C4"), false, "font-family:'" + font("font.doc.phonetic", "sans-serif") + "';", 1);
         if (meanings.isEmpty()) out += paragraph(escape(entry.value("Translation").toString()), 19, clr("#008577"));
         if (!entry.value("DetailNote").toString().isEmpty()) out += paragraph(escape(entry.value("DetailNote").toString()), 12, "#777777");
         out += "<hr color=\""+clr("#A7D6A4")+"\" size=\"1\" />";
+        }
+        if (portion == 1) return out + "</body></html>";
         bool hasSegments = false;
         for (auto value : meanings) for (auto sense : value.toObject().value("Senses").toArray()) {
             if (!sense.toObject().value("DefinitionSegments").toArray().isEmpty()) hasSegments = true;
@@ -234,9 +237,63 @@ public:
     }
 };
 QString EntryRenderer::render(const QJsonObject &entry, const QJsonObject &settings, const QString &selectedPart) { return Renderer(settings, entry.value("Word").toString()).render(entry, selectedPart); }
+QString EntryRenderer::daily(const QJsonObject &article,const QJsonObject &settings){
+    const auto word=article.value("Word").toString();Renderer r(settings,word);const auto source=article.value("Source").toObject();const auto entry=article.value("Entry").toObject();const auto record=entry.value("Record").toObject();
+    QString out="<html><body style=\"margin:8px;\">";
+    auto section=[&](const QString &title){return QString("<p style=\"margin:8px 0 3px 0;\"></p><table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\"><tr><td width=\"3\" bgcolor=\"#B9A8CE\"></td><td bgcolor=\"%1\" style=\"padding:5px 9px;\">%2</td></tr></table>").arg(escape(styleValue(settings,"color.daily.section_background","#F1EDF6")),r.paragraph(escape(title),15,"#62536F",false,"font-weight:600",0));};
+    QUrl link(source.value("Url").toString());QString attribution=escape(source.value("Source").toString()+" · "+source.value("PublishedAt").toString().left(10));
+    if(link.scheme()=="https")attribution+="　<a href=\""+escape(link.toString())+"\">阅读原文</a>";
+    const auto attributionHtml=r.paragraph(attribution,12,"#82758D");
+    auto fragment=[](QString html){int start=html.indexOf('>',html.indexOf("<body"))+1;return html.mid(start,html.lastIndexOf("</body>")-start);};
+    auto heading=fragment(r.render(entry,{},1));heading.remove(QRegularExpression("<hr[^>]*>"));
+    const auto imageData=article.value("ImageData").toString();
+    if(!imageData.isEmpty()){
+        const int imageWidth=qMax(1,article.value("ImageWidth").toInt(432)),imageHeight=qMax(1,article.value("ImageHeight").toInt(288));
+        const auto displaySize=QSize(imageWidth,imageHeight).scaled(180,qRound(110*styleNumber(settings,"number.doc.scale",.9)),Qt::KeepAspectRatio);
+        out+="<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\"><tr><td valign=\"top\">"+attributionHtml+heading+"</td><td width=\""+QString::number(displaySize.width()+8)+"\" align=\"right\" valign=\"top\"><img src=\"data:image/png;base64,"+escape(imageData)+"\" width=\""+QString::number(displaySize.width())+"\" height=\""+QString::number(displaySize.height())+"\" /></td></tr></table>";
+    }else out+=attributionHtml+heading;
+    out+="<hr color=\""+r.clr("#A7D6A4")+"\" size=\"1\" />";
+    out+=section("为什么今天学这个词")+r.paragraph(escape(article.value("Why").toString()),15,"#47404F");
+    out+=section("新闻语境");
+    const auto title=source.value("Title").toString();QString highlighted;int offset=0;
+    auto matches=QRegularExpression("(?<![A-Za-z])"+QRegularExpression::escape(word)+"(?![A-Za-z])",QRegularExpression::CaseInsensitiveOption).globalMatch(title);
+    while(matches.hasNext()){auto match=matches.next();highlighted+=r.words(title.mid(offset,match.capturedStart()-offset),"#49698E")+"<b style=\"color:#59477D\">"+escape(match.captured())+"</b>";offset=match.capturedEnd();}
+    highlighted+=r.words(title.mid(offset),"#49698E");
+    out+=r.paragraph(highlighted,20,"#49698E",true,"font-style:italic",4);
+    out+=r.paragraph(escape(article.value("QuoteChinese").toString()),14,"#777387");
+    const auto sentences=article.value("SummarySentences").toArray();
+    if(!sentences.isEmpty()){
+        int sentenceNumber=0;
+        for(auto value:sentences){auto sentence=value.toObject();
+            out+=r.paragraph("<span style=\"color:#9B87B3;font-style:normal\">"+QString::number(++sentenceNumber)+" │ </span>"+r.sentence(sentence.value("Text").toString(),sentence.value("Segments").toArray(),"#707070"),16,"#707070",true,"font-style:italic;margin-left:14px",4);
+            out+=r.paragraph("<span style=\"color:#D2C8DF\">　│ </span>"+escape(sentence.value("Chinese").toString()),14,r.clr("#008577"),false,"margin-left:14px",2);
+        }
+    }else{
+        auto original=source.value("Summary").toString();original.remove(QRegularExpression("Continue reading.*$",QRegularExpression::CaseInsensitiveOption));
+        for(const auto &sentence:original.split(QRegularExpression("(?<=[.!?])\\s+"),Qt::SkipEmptyParts))out+=r.paragraph(r.words(sentence,"#707070"),16,"#707070",true,"font-style:italic;margin-left:14px",4);
+    }
+    out+=section("学会使用");
+    auto learning=entry;auto learningRecord=record;
+    for(auto key:{"Derived","Origin","Notice","Sources"})learningRecord.remove(key);
+    learning.insert("Record",learningRecord);
+    out+=fragment(r.render(learning,{},2));
+    if(!article.value("Confusion").toString().isEmpty())out+=section("容易混淆的用法")+r.paragraph(escape(article.value("Confusion").toString()),14,"#47404F");
+    out+=section("词形与派生");
+    {
+        for(auto meaning:record.value("Meanings").toArray()){const auto forms=r.forms(record,meaning.toObject().value("PartOfSpeech").toString());if(!forms.isEmpty())out+=r.paragraph(escape(forms),14,"#777387");}
+        if(!record.value("Derived").toString().isEmpty())out+=r.paragraph(r.words(record.value("Derived").toString(),"#087F72"),14,"#087F72");
+    }
+    out+=r.paragraph("<a href=\"word:"+escape(QString::fromLatin1(QUrl::toPercentEncoding(word)))+"\">查看完整词典释义 →</a>",15,"#59477D",false,{},12);
+    return out+"</body></html>";
+}
+QString EntryRenderer::reviewSentence(const QString &text, const QJsonArray &segments, const QJsonObject &settings) {
+    Renderer r(settings);
+    return r.paragraph(r.sentence(text, segments, "#363636"), 23, "#363636", true, "font-weight:400", 2);
+}
 QString EntryRenderer::message(const QString &title, const QString &body, const QJsonObject &settings) { Renderer r(settings); return "<html><body>" + r.paragraph(escape(title), 26, "#0874C4", true, "font-weight:bold", 8) + r.paragraph(escape(body), 14, "#777777") + "</body></html>"; }
 
 EntryBrowser::EntryBrowser(QWidget *parent) : QTextBrowser(parent) {
+    document()->setDocumentMargin(4);
     document()->documentLayout()->registerHandler(QTextFormat::UserObject+1,this);
     setOpenLinks(false); setOpenExternalLinks(false); setMouseTracking(true); viewport()->setMouseTracking(true);
     setTextInteractionFlags(Qt::TextBrowserInteraction);

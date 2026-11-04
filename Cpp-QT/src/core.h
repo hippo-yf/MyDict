@@ -1,8 +1,10 @@
 #pragma once
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QString>
 #include <QList>
 #include <QByteArray>
+#include <QStringList>
 
 namespace MyDict {
 QString detectPair(QString text);
@@ -34,6 +36,13 @@ struct BookRow {
 };
 struct BookPage { QList<BookRow> rows; int total = 0; };
 struct HistorySelection { QString word, pair; QJsonObject entry; };
+struct ReviewQuestion {
+    qint64 wordId = 0;
+    QString word, pair, token, sentence, sentenceChinese;
+    QStringList options, meanings;
+    QJsonArray sentenceSegments;
+    int correctIndex = -1;
+};
 
 // Each operation opens an independent SQLite connection in its caller's thread.
 // This value type may safely be captured by background jobs.
@@ -53,8 +62,17 @@ public:
     void setFavorite(QString word, QString pair, bool favorite);
     void saveFavorite(QJsonObject entry);
     void recordImportError(QString word, QString error);
-    bool remove(qint64 id);
+    bool remove(qint64 id); // Compatibility API: always false; cached words cannot be deleted.
     BookPage page(QString filter, bool favoritesOnly, int offset, int limit = 50) const;
+    ReviewQuestion reviewQuestion(bool sentenceMode = false) const;
+    // selected == -1 records "not familiar" as an incorrect answer.
+    bool answerReview(const ReviewQuestion &question, int selected);
+    QJsonObject dailyArticle(QString date = {}) const;
+    QJsonArray dailyHistory(int offset = 0, int limit = 20) const;
+    QStringList recentDailyWords(int days = 90) const;
+    bool beginDailyRequest(QString date, int limit, bool existingAllowed = false);
+    void endDailyRequest(QString date);
+    void saveDailyArticle(QJsonObject article);
     QJsonObject navigate(int direction);
     // Keep the history word even when its selected source has not been cached.
     HistorySelection navigateForSource(int direction, bool deepSeek);

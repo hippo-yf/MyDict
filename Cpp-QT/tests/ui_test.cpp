@@ -23,11 +23,15 @@
 #include <QTextCursor>
 #include <QTextBlock>
 #include <QTextFragment>
+#include <QStackedWidget>
+#include <QComboBox>
 #include <QSignalSpy>
 #include <QImage>
 #include <QUuid>
 #include <exception>
 #include <QScopeGuard>
+#include <cmath>
+#include <limits>
 using namespace MyDict;
 
 class UiTest : public QObject {
@@ -54,6 +58,22 @@ private:
     }
     static QListWidgetItem *bookItem(QListWidget *list,qint64 id) {
         for(int i=0;i<list->count();++i)if(list->item(i)->data(Qt::UserRole).toLongLong()==id)return list->item(i);return nullptr;
+    }
+    static double reviewWeight(const QString &path) {
+        const auto name = QUuid::createUuid().toString();
+        double result = std::numeric_limits<double>::quiet_NaN();
+        {
+            auto connection = QSqlDatabase::addDatabase("QSQLITE", name);
+            connection.setDatabaseName(path);
+            if (connection.open()) {
+                QSqlQuery query(connection);
+                if (query.exec("SELECT COALESCE((SELECT log_weight FROM review_weights LIMIT 1),0)") && query.next())
+                    result = std::exp(query.value(0).toDouble());
+            }
+            connection.close();
+        }
+        QSqlDatabase::removeDatabase(name);
+        return result;
     }
     static bool hasIconColor(const QImage &image,bool blue) {
         for(int y=0;y<image.height();++y)for(int x=0;x<image.width();++x){const auto color=image.pixelColor(x,y);if(color.alpha()<200)continue;
@@ -102,6 +122,226 @@ private slots:
 #endif
     }
     void cleanup(){AppFonts::apply({},{});}
+    void favoriteReviewAnswersNextAndExit() {
+        QTemporaryDir dir;
+        Settings config(dir.path());
+        offlineSettings(config, "review-ui", true);
+        Database db(config.databasePath(), config.username());
+        db.initialize();
+        auto favoriteEntry = entry();
+        auto record = favoriteEntry.value("Record").toObject();
+        auto meanings = record.value("Meanings").toArray();
+        auto meaning = meanings[0].toObject();
+        auto senses = meaning.value("Senses").toArray();
+        auto sense = senses[0].toObject();
+        auto examples = sense.value("Examples").toArray();
+        auto example = examples[0].toObject();
+        example.insert("Segments", QJsonArray{
+            QJsonObject{{"Text","They "},{"Role","subject"}},
+            QJsonObject{{"Text","r"},{"Role","predicate"}},
+            QJsonObject{{"Text","un"},{"Role","predicate"}},
+            QJsonObject{{"Text"," every day."},{"Role","adverbial"}}});
+        examples[0] = example; sense.insert("Examples", examples); senses[0] = sense;
+        meaning.insert("Senses", senses); meanings[0] = meaning; record.insert("Meanings", meanings);
+        favoriteEntry.insert("Record", record);
+        db.saveFavorite(favoriteEntry);
+        for (const auto &word : QStringList{"apple", "pear", "book"}) {
+            auto other = entry();
+            other.insert("Word", word);
+            other.insert("Summary", word + QStringLiteral(" 的中文释义，包含较长的说明，用来验证窄窗口下多行文字完整显示，不能裁切最后一行。"));
+            db.store(other);
+        }
+        MainWindow window(dir.path());
+        window.show();
+        auto *input = window.findChild<QLineEdit *>("queryInput");
+        QTRY_VERIFY(input->isEnabled());
+        window.resize(480,600);
+        QTest::mouseClick(window.findChild<QPushButton *>("bookTab"), Qt::LeftButton);
+        QTest::mouseClick(window.findChild<QPushButton *>("reviewStart"), Qt::LeftButton);
+        auto *pages = window.findChild<QStackedWidget *>("pages");
+        auto *unfamiliar = window.findChild<QPushButton *>("reviewUnfamiliar");
+        QVERIFY(unfamiliar);
+        QVERIFY(!window.findChild<QPushButton *>("reviewNext"));
+        QVERIFY(!window.findChild<QLabel *>("reviewFeedback"));
+        auto *word = window.findChild<QLabel *>("reviewWord");
+        auto *first = window.findChild<QPushButton *>("reviewChoice0");
+        QTRY_VERIFY(first->isVisible() && first->isEnabled());
+        QCOMPARE(pages->currentIndex(), 2);
+        QCOMPARE(word->text(), QString("run"));
+        QCOMPARE(first->findChild<QLabel *>()->alignment(), Qt::Alignment(Qt::AlignCenter));
+        QVERIFY(unfamiliar->isEnabled());
+        window.grab().save(QCoreApplication::applicationDirPath()+"/../ui-review-question.png");
+        QPushButton *correct = nullptr, *wrong = nullptr;
+        for (int i = 0; i < 4; ++i) {
+            auto *choice = window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i));
+            if (choice->findChild<QLabel *>()->text().contains(QStringLiteral("跑；经营"))) correct = choice;
+            else wrong = choice;
+        }
+        QVERIFY(correct && wrong);
+        QTest::mouseClick(wrong, Qt::LeftButton);
+        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.3) < 1e-12);
+        QVERIFY(correct->styleSheet().contains("#3F8D59"));
+        QVERIFY(wrong->styleSheet().contains("#B94D64"));
+        QVERIFY(!correct->isEnabled());
+        window.grab().save(QCoreApplication::applicationDirPath()+"/../ui-review-answer.png");
+        // Even clicking a disabled answer advances after an incorrect answer.
+        QTest::mouseClick(first, Qt::LeftButton);
+        QTRY_VERIFY(first->isVisible() && first->isEnabled());
+        QVERIFY(first->styleSheet().isEmpty());
+        QVERIFY(std::abs(reviewWeight(db.path()) - 1.3) < 1e-12);
+        for (int i = 0; i < 4; ++i) {
+            auto *choice = window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i));
+            if (choice->findChild<QLabel *>()->text().contains(QStringLiteral("跑；经营"))) correct = choice;
+        }
+        QTest::mouseClick(correct, Qt::LeftButton);
+        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - .91) < 1e-12);
+        QTRY_VERIFY(first->isVisible() && first->isEnabled());
+
+        // A page click during the pending write is honored after commit.
+        {
+            auto blocker = QSqlDatabase::addDatabase("QSQLITE", "review-write-lock");
+            blocker.setDatabaseName(db.path());
+            QVERIFY(blocker.open());
+            QSqlQuery lock(blocker);
+            QVERIFY(lock.exec("BEGIN IMMEDIATE"));
+            QTest::mouseClick(unfamiliar, Qt::LeftButton);
+            QVERIFY(!first->isEnabled());
+            QTest::mouseClick(word, Qt::LeftButton);
+            bool heartbeat = false;
+            QTimer::singleShot(80, [&] { heartbeat = true; lock.exec("ROLLBACK"); });
+            QTRY_VERIFY(heartbeat);
+            QTRY_VERIFY(first->isVisible() && first->isEnabled());
+            QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.183) < 1e-12);
+            blocker.close();
+        }
+        QSqlDatabase::removeDatabase("review-write-lock");
+        QTest::mouseClick(unfamiliar, Qt::LeftButton);
+        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.5379) < 1e-12);
+        QVERIFY(!first->isEnabled());
+        for (int i = 0; i < 4; ++i) {
+            auto *choice = window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i));
+            QVERIFY(!choice->styleSheet().contains("#B94D64"));
+            if (choice->findChild<QLabel *>()->text().contains(QStringLiteral("跑；经营")))
+                QVERIFY(choice->styleSheet().contains("#3F8D59"));
+        }
+        auto *mode = window.findChild<QComboBox *>("reviewMode");
+        QVERIFY(mode);
+        QTRY_VERIFY(mode->isEnabled());
+        mode->setCurrentIndex(1);
+        QTRY_VERIFY(first->isVisible() && first->isEnabled() && word->text().contains("____"));
+        QTextDocument sentenceDocument;
+        sentenceDocument.setHtml(word->text());
+        QCOMPARE(sentenceDocument.toPlainText(), QString("They ____ every day."));
+        QVERIFY(word->text().contains("#2563a6", Qt::CaseInsensitive));
+        QVERIFY(word->text().contains("font-style:italic"));
+        QCOMPARE(mode->itemText(1), QStringLiteral("选词填空"));
+        QVERIFY(!word->text().contains("run", Qt::CaseInsensitive));
+        window.grab().save(QCoreApplication::applicationDirPath()+"/../ui-review-cloze.png");
+        for (int i = 0; i < 4; ++i) {
+            auto *choice = window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i));
+            if (choice->findChild<QLabel *>()->text().endsWith("run")) correct = choice;
+        }
+        QTest::qWait(50);
+        QList<QRect> optionRects;
+        for (int i = 0; i < 4; ++i) optionRects.append(window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i))->geometry());
+        QTest::mouseClick(correct, Qt::LeftButton);
+        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.07653) < 1e-12);
+        QVERIFY(!first->isEnabled());
+        auto *translation = window.findChild<QLabel *>("reviewPrompt");
+        QVERIFY(translation->isVisible());
+        for (int i = 0; i < 4; ++i) {
+            auto *option = window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i));
+            for (auto *label : option->findChildren<QLabel *>()) {
+                QVERIFY(label->height() >= label->heightForWidth(label->width()));
+                QVERIFY(option->rect().contains(label->geometry()));
+            }
+        }
+        QTest::qWait(50);
+        for (int i = 0; i < 4; ++i) QCOMPARE(window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i))->geometry(), optionRects.at(i));
+        QCOMPARE(translation->text(), QStringLiteral("他们每天跑步。"));
+        for (int i = 0; i < 4; ++i) {
+            const auto text = window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i))->findChild<QLabel *>()->text();
+            QVERIFY(window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i))->findChild<QLabel *>("reviewChoiceMeaning")->isVisible());
+            QVERIFY(!text.contains(QStringLiteral("正确")));
+        }
+        QTest::mouseClick(word, Qt::LeftButton);
+        QTRY_VERIFY(first->isVisible() && first->isEnabled());
+        QVERIFY(!translation->isVisible());
+        QTest::mouseClick(unfamiliar, Qt::LeftButton);
+        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.399489) < 1e-12);
+        QVERIFY(!first->isEnabled());
+        QStringList feedback;
+        for (int i = 0; i < 4; ++i) {
+            auto *choice = window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i));
+            const auto text = choice->findChild<QLabel *>()->text();
+            QVERIFY(window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i))->findChild<QLabel *>("reviewChoiceMeaning")->isVisible());
+            const auto meaningText = choice->findChild<QLabel *>("reviewChoiceMeaning")->text();
+            QVERIFY(meaningText.contains(QStringLiteral("跑；经营")) || meaningText.contains(QStringLiteral("的中文释义")));
+            QVERIFY(!text.contains(QStringLiteral("正确")));
+            feedback.append(text);
+        }
+        const auto savedSentence = word->text();
+        QTest::mouseClick(window.findChild<QPushButton *>("lookupTab"), Qt::LeftButton);
+        QCOMPARE(pages->currentIndex(), 0);
+        input->setText("apple");
+        QTest::qWait(800);
+        QTest::mouseClick(window.findChild<QPushButton *>("bookTab"), Qt::LeftButton);
+        QCOMPARE(pages->currentIndex(), 2);
+        QCOMPARE(word->text(), savedSentence);
+        QVERIFY(!first->isEnabled());
+        QCOMPARE(mode->currentIndex(), 1);
+        for (int i = 0; i < 4; ++i)
+            QCOMPARE(window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i))->findChild<QLabel *>()->text(), feedback.at(i));
+        QVERIFY(std::abs(reviewWeight(db.path()) - 1.399489) < 1e-12);
+        window.grab().save(QCoreApplication::applicationDirPath()+"/../ui-review-cloze-feedback.png");
+        QTest::mouseClick(word, Qt::LeftButton);
+        QTRY_VERIFY(first->isVisible() && first->isEnabled());
+        QTest::mouseClick(window.findChild<QPushButton *>("reviewExit"), Qt::LeftButton);
+        QCOMPARE(pages->currentIndex(), 1);
+        QVERIFY(window.isVisible());
+        QCOMPARE(db.page("", false, 0).rows.first().word, QString("run"));
+    }
+
+    void favoriteBookPagingAndNumbers() {
+        QTemporaryDir dir; Settings config(dir.path()); offlineSettings(config,"book-pages",true);
+        Database db(config.databasePath(),config.username());db.initialize();
+        for(int i=0;i<53;++i){auto e=entry();e.insert("Word",QString("word%1").arg(i));db.saveFavorite(e);}
+        auto cached=entry();cached.insert("Word","cache-only");db.store(cached);
+        MainWindow window(dir.path());window.show();QTRY_VERIFY(window.findChild<QLineEdit*>("queryInput")->isEnabled());
+        QTest::mouseClick(window.findChild<QPushButton*>("bookTab"),Qt::LeftButton);
+        auto *list=window.findChild<QListWidget*>("wordbook");QTRY_COMPARE(list->count(),50);
+        auto *jump=window.findChild<QSpinBox*>("bookPageJump");QVERIFY(jump);QCOMPARE(jump->maximum(),2);
+        QCOMPARE(list->itemWidget(list->item(0))->findChild<QLabel*>("bookRowNumber")->text(),QString("1"));
+        QCOMPARE(list->itemWidget(list->item(49))->findChild<QLabel*>("bookRowNumber")->text(),QString("50"));
+        jump->setFocus();QTest::keyClick(jump,Qt::Key_A,Qt::ControlModifier);QTest::keyClicks(jump,"2");QTest::keyClick(jump,Qt::Key_Return);
+        QTRY_COMPARE(list->count(),3);QCOMPARE(list->itemWidget(list->item(0))->findChild<QLabel*>("bookRowNumber")->text(),QString("1"));
+        auto *save=list->itemWidget(list->item(0))->findChild<QPushButton*>("rowFavorite");QTest::mouseClick(save,Qt::LeftButton);
+        QTRY_COMPARE(list->count(),2);QCOMPARE(db.page({},false,0).total,54);QCOMPARE(db.page({},true,0).total,52);
+    }
+
+    void emptyReviewCanExitWhileLoading() {
+        QTemporaryDir dir;
+        Settings config(dir.path());
+        offlineSettings(config, "empty-review", false);
+        MainWindow window(dir.path());
+        window.show();
+        QTRY_VERIFY(window.findChild<QLineEdit *>("queryInput")->isEnabled());
+        QTest::mouseClick(window.findChild<QPushButton *>("bookTab"), Qt::LeftButton);
+        auto *start = window.findChild<QPushButton *>("reviewStart");
+        auto *exit = window.findChild<QPushButton *>("reviewExit");
+        auto *pages = window.findChild<QStackedWidget *>("pages");
+        QTest::mouseClick(start, Qt::LeftButton);
+        QTest::mouseClick(exit, Qt::LeftButton);
+        QTest::qWait(100);
+        QCOMPARE(pages->currentIndex(), 1);
+        QTest::mouseClick(start, Qt::LeftButton);
+        QTRY_VERIFY(window.findChild<QLabel *>("reviewWord")->text().contains(QStringLiteral("暂时无法出题")));
+        QVERIFY(window.findChild<QLabel *>("notice")->text().contains(QStringLiteral("收藏")));
+        QVERIFY(!window.findChild<QPushButton *>("reviewChoice0")->isVisible());
+        QTest::mouseClick(exit, Qt::LeftButton);
+        QCOMPARE(pages->currentIndex(), 1);
+    }
+
     void roundedPartLabelsRemainClickable(){
         EntryBrowser browser;browser.resize(650,400);browser.setHtml(EntryRenderer::render(entry(),defaultSettings()));browser.show();
         QTextCursor label(browser.document());bool found=false;
@@ -123,14 +363,14 @@ private slots:
         QCOMPARE(window.minimumWidth(),480);window.resize(480,600);QTRY_COMPARE(window.width(),480);
         input->setText("run");auto *browser=window.findChild<EntryBrowser*>("entryBrowser");QVERIFY(browser);
         QTRY_VERIFY(browser->toPlainText().contains("To move quickly"));
-        const QStringList lookupControls{"lookupTab","bookTab","syncButton","about","minimize","maximize","close","backButton","forwardButton","queryInput","deepSeekButton","queryButton","favoriteButton","copyButton","entryBrowser"};
+        const QStringList lookupControls{"lookupTab","bookTab","dailyTab","syncButton","about","minimize","maximize","close","backButton","forwardButton","queryInput","deepSeekButton","queryButton","favoriteButton","copyButton","entryBrowser"};
         for(const auto &name:lookupControls){
             auto *widget=window.findChild<QWidget*>(name);QVERIFY(widget);QVERIFY(widget->isVisible());
             QVERIFY2(window.rect().contains(QRect(widget->mapTo(&window,QPoint()),widget->size())),qPrintable(name));
         }
         QVERIFY(input->width()>=120);window.grab().save(QCoreApplication::applicationDirPath()+"/../ui-compact-preview.png");
         QTest::mouseClick(window.findChild<QPushButton*>("bookTab"),Qt::LeftButton);
-        const QStringList bookControls{"bookFilter","favoritesOnly","exportButton","bookMore","wordbook"};
+        const QStringList bookControls{"bookFilter","bookPageJump","exportButton","bookMore","wordbook"};
         for(const auto &name:bookControls){
             auto *widget=window.findChild<QWidget*>(name);QVERIFY(widget);QVERIFY(widget->isVisible());
             QVERIFY2(window.rect().contains(QRect(widget->mapTo(&window,QPoint()),widget->size())),qPrintable(name));
@@ -165,14 +405,12 @@ private slots:
         }
         QSqlDatabase::removeDatabase("ui-lock");QTest::mouseClick(bookTab,Qt::LeftButton);
         auto *list=window.findChild<QListWidget*>("wordbook");QTRY_COMPARE(list->count(),1);
-        auto *remove=window.findChild<QPushButton*>("rowRemove");auto *saved=window.findChild<QPushButton*>("rowFavorite");QVERIFY(remove&&saved);QVERIFY(!remove->isEnabled());
+        auto *saved=window.findChild<QPushButton*>("rowFavorite");QVERIFY(saved);QVERIFY(!window.findChild<QPushButton*>("rowRemove"));QVERIFY(!window.findChild<QWidget*>("favoritesOnly"));
         window.grab().save(QCoreApplication::applicationDirPath()+"/../ui-book-preview.png");
         QTest::mouseClick(saved,Qt::LeftButton);QTRY_VERIFY(!db.isFavorite("run","en|zh-CN"));
-        QTRY_VERIFY(window.findChild<QPushButton*>("rowRemove")&&window.findChild<QPushButton*>("rowRemove")->isEnabled());QTest::mouseClick(window.findChild<QPushButton*>("rowRemove"),Qt::LeftButton);
-        QTRY_VERIFY(db.find("run","en|zh-CN").isEmpty());QTRY_COMPARE(list->count(),0);
-        // A deleted word in DeepSeek mode only offers a manual query. Typing
-        // cannot spend API credit or restore the word.
-        input->setText("run again");input->setText("run");QTest::qWait(900);QVERIFY(db.find("run","en|zh-CN").isEmpty());
+        QTRY_COMPARE(list->count(),0);
+        QVERIFY(!db.find("run","en|zh-CN").isEmpty());
+        input->setText("run again");input->setText("run");QTest::qWait(900);QVERIFY(!db.find("run","en|zh-CN").isEmpty());
         // Identity hot reload switches to a separately locked profile and restores
         // its own history without copying the previous user's entries.
         Settings edited(dir.path());edited.load();edited.data.insert("username","another-user");
@@ -280,7 +518,7 @@ private slots:
         try {
         QTemporaryDir dir;QVERIFY(dir.isValid());Settings config(dir.path());offlineSettings(config,"ui-source-history",false);
         Database db(config.databasePath(),config.username());db.initialize();const QString onlineText="Online historical definition.",aiText="DeepSeek newer historical definition.",exclusiveText="DeepSeek exclusive historical meaning.";
-        db.store(sourceEntry("run",false,onlineText,"2026-11-01T00:00:00.0000000Z"));db.store(sourceEntry("run",true,aiText,"2026-11-03T00:00:00.0000000Z"));db.store(sourceEntry("exclusive",true,exclusiveText,"2026-11-03T00:00:00.0000000Z"));
+        db.store(sourceEntry("run",false,onlineText,"2026-11-01T00:00:00.0000000Z"));db.store(sourceEntry("run",true,aiText,"2026-11-03T00:00:00.0000000Z"));db.store(sourceEntry("exclusive",true,exclusiveText,"2026-11-03T00:00:00.0000000Z"));db.setFavorite("run","en|zh-CN",true);db.setFavorite("exclusive","en|zh-CN",true);
         qint64 runId=0,exclusiveId=0;for(const auto &row:db.page({},false,0).rows){if(row.word=="run")runId=row.id;if(row.word=="exclusive")exclusiveId=row.id;}QVERIFY(runId&&exclusiveId);
         MainWindow window(dir.path());QVERIFY(QObject::disconnect(&window,&MainWindow::onlineLookup,nullptr,nullptr));QSignalSpy requests(&window,&MainWindow::onlineLookup);window.show();
         auto *input=window.findChild<QLineEdit*>("queryInput");auto *browser=window.findChild<EntryBrowser*>("entryBrowser");auto *source=window.findChild<QPushButton*>("deepSeekButton");auto *back=window.findChild<QPushButton*>("backButton");auto *forward=window.findChild<QPushButton*>("forwardButton");auto *bookTab=window.findChild<QPushButton*>("bookTab");auto *list=window.findChild<QListWidget*>("wordbook");auto *star=window.findChild<QPushButton*>("favoriteButton");auto *copy=window.findChild<QPushButton*>("copyButton");QVERIFY(input&&browser&&source&&back&&forward&&bookTab&&list&&star&&copy);

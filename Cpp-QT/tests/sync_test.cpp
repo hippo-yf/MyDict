@@ -100,7 +100,7 @@ private slots:
         catch(const std::exception &e){message=QString::fromUtf8(e.what());}
         stop.join();QVERIFY2(message.contains(QString::fromUtf8("取消")),qPrintable(message));QVERIFY(elapsed.elapsed()<2000);
     }
-    void twoDevicesConvergeAndPreserveDeletion(){
+    void twoDevicesConvergeAndPreserveUnfavoritedCache(){
         QTemporaryDir temp;const auto repo=temp.filePath("remote.git");git(temp.path(),{"init","--bare","--initial-branch=main",repo});
         const auto aDir=temp.filePath("a"),bDir=temp.filePath("b");QDir().mkpath(aDir);QDir().mkpath(bDir);
         Database a(QDir(aDir).filePath("words.sqlite"),"sync-test"),b(QDir(bDir).filePath("words.sqlite"),"sync-test");a.initialize();b.initialize();
@@ -109,11 +109,11 @@ private slots:
         QVERIFY(!CacheSync::run(aDir,ac,a.path(),"sync-test").isEmpty());
         QCOMPARE(a.syncedRevision(),a.revision());
         CacheSync::run(bDir,bc,b.path(),"sync-test",true);QVERIFY(!b.find("go","en|zh-CN").isEmpty());QVERIFY(b.isFavorite("go","en|zh-CN"));
-        b.setFavorite("go","en|zh-CN",false);const auto rows=b.page({},false,0);QCOMPARE(rows.total,1);QVERIFY(b.remove(rows.rows.at(0).id));
+        b.setFavorite("go","en|zh-CN",false);const auto rows=b.page({},false,0);QCOMPARE(rows.total,1);QVERIFY(!b.remove(rows.rows.at(0).id));
         CacheSync::run(bDir,bc,b.path(),"sync-test");CacheSync::run(aDir,ac,a.path(),"sync-test",true);
-        QVERIFY(a.find("go","en|zh-CN").isEmpty());QVERIFY(!a.isFavorite("go","en|zh-CN"));
+        QVERIFY(!a.find("go","en|zh-CN").isEmpty());QVERIFY(!a.isFavorite("go","en|zh-CN"));
         CacheSync::run(aDir,ac,a.path(),"sync-test");CacheSync::run(bDir,bc,b.path(),"sync-test",true);
-        QVERIFY(b.find("go","en|zh-CN").isEmpty());
+        QVERIFY(!b.find("go","en|zh-CN").isEmpty());
         const auto tree=git(repo,{"ls-tree","-r","--name-only","main"});
         QVERIFY(tree.contains("users/sync-test/shared/qt-"));QCOMPARE(tree.split('\n').size(),2);QVERIFY(!tree.contains(".json"));QVERIFY(!tree.contains("qt-users/"));
     }

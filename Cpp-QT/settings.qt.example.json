@@ -83,5 +83,40 @@
       "TimeoutSeconds": "请求超时秒数，范围 10–300。",
       "MaxTokens": "输出 token 上限，范围 512–16384；截断时可适当增大。"
     }
+  },
+  "DailyWord": {
+    "_说明": "今日词汇：首次进入时后台生成，成功后缓存；使用 DeepSeek.ApiKey 和 Endpoint，与查词开关独立。",
+    "Enabled": true,
+    "_Enabled": "是否允许生成今日词汇；关闭后仍可浏览缓存。",
+    "TimeZone": "Asia/Shanghai",
+    "_TimeZone": "每天日期边界使用的 IANA 时区。",
+    "Difficulty": "中等",
+    "_Difficulty": "选词难度偏好，例如中等、进阶。",
+    "MaxRequestsPerDay": 2,
+    "_MaxRequestsPerDay": "每个本地用户每天最多调用模型的次数，1–10；失败请求也计数。",
+    "RepeatDays": 90,
+    "_RepeatDays": "避免重复推荐近多少天介绍过的词，1–365。",
+    "Model": "",
+    "_Model": "留空复用 DeepSeek.Model，否则使用这里指定的模型。",
+    "Feeds": [
+      {
+        "Topic": "科学",
+        "Name": "The Guardian · Science",
+        "Url": "https://www.theguardian.com/science/rss"
+      },
+      {
+        "Topic": "新闻",
+        "Name": "The Guardian · World",
+        "Url": "https://www.theguardian.com/world/rss"
+      },
+      {
+        "Topic": "社会",
+        "Name": "The Guardian · Society",
+        "Url": "https://www.theguardian.com/society/rss"
+      }
+    ],
+    "_Feeds": "RSS 2.0 HTTPS 来源，按日期轮换，失败后依次尝试其他源。Topic 为主题，Name 为来源名称，Url 为订阅地址。",
+    "ShowImage": true,
+    "_ShowImage": "是否后台获取原新闻配图；缩略图缓存于 SQLite。"
   }
 }

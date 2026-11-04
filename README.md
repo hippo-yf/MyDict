@@ -8,7 +8,7 @@ C# / WPF 中英词典，使用 VS2022 和 .NET Framework 4.8 编译。当前固�
 
 完整架构、数据合同、查询流程、迁移同步、测试发布及排障说明见 [技术交接 Specification](docs/HANDOVER_SPECIFICATION.md)。
 
-C++ / Qt 跨平台版本见 [Cpp-QT](Cpp-QT/README.md)，使用 Conda、CMake 和平台原生编译器，另有 Windows、macOS、Linux 自动构建。
+C++ / Qt 跨平台版本现已更新至 **1.6**（标签 `qt-v1.6`），[下载发布包](https://github.com/hippo-yf/MyDict/releases/tag/qt-v1.6)。详见 [Cpp-QT](Cpp-QT/README.md)，使用 Conda、CMake 和平台原生编译器，另有 Windows、macOS、Linux 自动构建。
 
 当前开发分支还提供 **C# 与 Qt 公共缓存版**：使用同一 `username` 和 Gitee 仓库即可共享释义、收藏与删除状态，协议为 `mydict-json-v1`，本地库为 `words-shared.sqlite`。固定发布标签 `v1.5.1` 不变；它不具备公共协议，需要升级客户端。
 

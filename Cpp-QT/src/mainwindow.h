@@ -1,4 +1,5 @@
 #pragma once
+#include <QSpinBox>
 #include "core.h"
 #include <QMainWindow>
 #include <QJsonObject>
@@ -16,8 +17,11 @@ class QCheckBox;
 class QTimer;
 class QFileSystemWatcher;
 class QCloseEvent;
+class QScrollArea;
+class QComboBox;
 namespace MyDict {
 class OnlineService;
+class DailyPage;
 class EntryBrowser;
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -41,6 +45,10 @@ private:
     QString fontCoverageKey;
     bool needsChineseFallback = false;
     QString selectedPart;
+    ReviewQuestion review;
+    quint64 reviewRevision = 0;
+    bool reviewActive = false, reviewAnswered = false, reviewBusy = false, reviewAdvancePending = false;
+    int reviewSelection = -1;
     quint64 requestId = 0, bookRevision = 0, dirtyGeneration = 0, favoriteRevision = 0;
     int pendingWrites = 0, offset = 0, total = 0;
     bool initialized = false, syncing = false, pendingClose = false, favorite = false, savingSettings = false, switchingIdentity = false;
@@ -57,11 +65,18 @@ private:
     QPushButton *lookupTab = nullptr, *bookTab = nullptr, *back = nullptr, *forward = nullptr;
     QPushButton *query = nullptr, *deepSeek = nullptr, *star = nullptr, *copy = nullptr, *sync = nullptr;
     QLineEdit *input = nullptr, *filter = nullptr;
-    QCheckBox *favoritesOnly = nullptr;
+    QSpinBox *pageJump = nullptr;
     EntryBrowser *browser = nullptr;
+    DailyPage *dailyPage = nullptr;
+    QPushButton *dailyTab = nullptr;
     QListWidget *book = nullptr;
     QLabel *pageLabel = nullptr, *notice = nullptr, *emptyBook = nullptr;
     QPushButton *previous = nullptr, *next = nullptr;
+    QLabel *reviewWord = nullptr, *reviewPrompt = nullptr;
+    QComboBox *reviewMode = nullptr;
+    QList<QPushButton *> reviewChoices;
+    QPushButton *reviewUnfamiliar = nullptr, *reviewExit = nullptr;
+    QScrollArea *reviewScroll = nullptr;
     QTimer *inputDelay = nullptr, *filterDelay = nullptr, *noticeTimer = nullptr, *syncTimer = nullptr, *reloadDelay = nullptr;
     QFileSystemWatcher *configWatcher = nullptr;
     qint64 firstDirtyAt = 0;
@@ -90,8 +105,14 @@ private:
     void refreshFavoriteState();
     void writeFavorite(QString word, QString pair, bool saved);
     void refreshBook();
+    void startReview();
+    void nextReview();
+    void advanceReview();
+    void chooseReviewAnswer(int selected);
+    void saveReviewAnswer();
+    void leaveReview(int page = 1);
     void setRowFavorite(BookRow row);
-    void removeRow(BookRow row);
+
     void dirty();
     void writeFinished();
     void toast(const QString &message, bool error = false);

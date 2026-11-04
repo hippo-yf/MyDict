@@ -10,6 +10,8 @@ double styleNumber(const QJsonObject &settings, const QString &key, double fallb
 class EntryRenderer {
 public:
     static QString render(const QJsonObject &entry, const QJsonObject &settings, const QString &selectedPart = {});
+    static QString daily(const QJsonObject &article, const QJsonObject &settings);
+    static QString reviewSentence(const QString &text, const QJsonArray &segments, const QJsonObject &settings);
     static QString message(const QString &title, const QString &body, const QJsonObject &settings);
 };
 class EntryBrowser : public QTextBrowser, public QTextObjectInterface {

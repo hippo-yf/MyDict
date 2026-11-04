@@ -17,7 +17,10 @@
 #include <QVariant>
 #include <QSet>
 #include <QThread>
+#include <QRandomGenerator>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace MyDict {
@@ -240,8 +243,9 @@ QJsonObject decode(const QByteArray &bytes) {
 qint64 wordId(QSqlDatabase &db, const QString &word, const QString &pair) {
     return scalar(db, QStringLiteral("SELECT id FROM words WHERE normalized=? AND pair=?"), {normalizeWord(word), pair}).toLongLong();
 }
-qint64 deletedAt(QSqlDatabase &db, const QString &word, const QString &pair) {
-    return scalar(db, QStringLiteral("SELECT deleted_ticks FROM deleted_words WHERE normalized=? AND pair=?"), {normalizeWord(word), pair}).toLongLong();
+qint64 deletedAt(QSqlDatabase &, const QString &, const QString &) {
+    // Legacy deletion markers must never suppress cached definitions.
+    return 0;
 }
 bool favoriteEvent(QSqlDatabase &db, const QString &word, const QString &pair, bool favorite, QString at) {
     at = canonicalTime(at);
@@ -293,7 +297,7 @@ bool storeCore(QSqlDatabase &db, QJsonObject entry, qint64 intent = 0) {
     if (!changed) return false;
     QString provider = entry.value(QStringLiteral("TranslationProvider")).toString(QStringLiteral("MyMemory"));
     query(db, QStringLiteral("INSERT OR REPLACE INTO sources(source_key,word_id,provider,is_ai,summary,ticks,payload) VALUES(?,?,?,?,?,?,?)"), {key, id, provider, isDeepSeek(entry) ? 1 : 0, shortTranslation(entry), ticks, bytes});
-    query(db, QStringLiteral("UPDATE words SET word=CASE WHEN last_ticks<=? THEN ? ELSE word END,last_ticks=MAX(last_ticks,?),summary=COALESCE((SELECT summary FROM sources WHERE word_id=? ORDER BY is_ai DESC,ticks DESC,source_key LIMIT 1),'') WHERE id=?"), {ticks, word, ticks, id, id});
+    query(db, QStringLiteral("UPDATE words SET word=CASE WHEN last_ticks<=? THEN ? ELSE word END,last_ticks=MAX(last_ticks,?),summary=COALESCE((SELECT summary FROM sources WHERE word_id=? ORDER BY is_ai DESC,(source_key LIKE 'DailyWord|%') ASC,ticks DESC,source_key LIMIT 1),'') WHERE id=?"), {ticks, word, ticks, id, id});
     return true;
 }
 void visit(QSqlDatabase &db, const QString &key) {
@@ -304,40 +308,114 @@ void visit(QSqlDatabase &db, const QString &key) {
     query(db, QStringLiteral("INSERT INTO history(position,source_key) VALUES(?,?)"), {cursor + 1, key});
     setMeta(db, QStringLiteral("cursor"), QString::number(cursor + 1));
 }
-void removeContent(QSqlDatabase &db, qint64 id) {
-    qint64 cursor = meta(db, QStringLiteral("cursor")).toLongLong();
-    auto removed = query(db, QStringLiteral("DELETE FROM history WHERE source_key IN (SELECT source_key FROM sources WHERE word_id=?)"), {id});
-    bool historyChanged = removed.numRowsAffected() > 0; removed.finish();
-    query(db, QStringLiteral("DELETE FROM sources WHERE word_id=?"), {id});
-    query(db, QStringLiteral("DELETE FROM words WHERE id=?"), {id});
-    if (!historyChanged) return;
-    qint64 previous = scalar(db, QStringLiteral("SELECT COUNT(*) FROM history WHERE position<=?"), {cursor}).toLongLong() - 1;
-    query(db, QStringLiteral("CREATE TEMP TABLE compact_history(position INTEGER PRIMARY KEY AUTOINCREMENT,source_key TEXT NOT NULL)"));
-    query(db, QStringLiteral("INSERT INTO compact_history(source_key) SELECT source_key FROM history ORDER BY position"));
-    query(db, QStringLiteral("DELETE FROM history"));
-    query(db, QStringLiteral("INSERT INTO history(position,source_key) SELECT position-1,source_key FROM compact_history ORDER BY position"));
-    query(db, QStringLiteral("DROP TABLE compact_history"));
-    qint64 last = scalar(db, QStringLiteral("SELECT COALESCE(MAX(position),-1) FROM history")).toLongLong();
-    setMeta(db, QStringLiteral("cursor"), QString::number(last < 0 ? -1 : std::max(Q_INT64_C(0), std::min(previous, last))));
-}
-bool deleteCore(QSqlDatabase &db, const QString &word, const QString &pair, qint64 ticks) {
-    auto normalized = normalizeWord(word);
-    if (deletedAt(db, normalized, pair) >= ticks) return false;
-    query(db, QStringLiteral("INSERT OR REPLACE INTO deleted_words(normalized,pair,deleted_ticks) VALUES(?,?,?)"), {normalized, pair, ticks});
-    auto row = query(db, QStringLiteral("SELECT id,last_ticks,favorite_at FROM words WHERE normalized=? AND pair=?"), {normalized, pair});
-    qint64 id = 0;
-    if (row.next() && std::max(row.value(1).toLongLong(), timeTicks(row.value(2).toString())) <= ticks) id = row.value(0).toLongLong();
-    row.finish();
-    if (id > 0) removeContent(db, id);
-    return true;
+bool deleteCore(QSqlDatabase &, const QString &, const QString &, qint64) {
+    // Accept old snapshots/imports without applying destructive deletion events.
+    return false;
 }
 QJsonObject selectEntry(QSqlDatabase &db, const QString &where, const QVariantList &parameters) {
-    auto row = query(db, QStringLiteral("SELECT s.payload FROM words w JOIN sources s ON s.word_id=w.id WHERE ") + where + QStringLiteral(" ORDER BY s.ticks DESC,s.is_ai DESC,s.source_key LIMIT 1"), parameters);
+    auto row = query(db, QStringLiteral("SELECT s.payload FROM words w JOIN sources s ON s.word_id=w.id WHERE ") + where + QStringLiteral(" ORDER BY (s.source_key LIKE 'DailyWord|%') ASC,s.ticks DESC,s.is_ai DESC,s.source_key LIMIT 1"), parameters);
     return row.next() ? decode(row.value(0).toByteArray()) : QJsonObject();
 }
 QString likeWhere() {
     return QStringLiteral(" WHERE (?=0 OR w.favorite=1) AND (?='' OR instr(lower(w.word),?)>0 OR instr(lower(w.summary),?)>0)");
 }
+double reviewScore(double logWeight) {
+    double uniform;
+    do { uniform = QRandomGenerator::global()->generateDouble(); } while (uniform == 0);
+    return std::log(-std::log1p(-uniform)) - logWeight;
+}
+
+struct ClozeExample { QString first, second; QJsonArray segments; QString chinese; };
+ClozeExample clozeExample(const QJsonObject &entry) {
+    const auto record = entry.value("Record").toObject();
+    const auto word = entry.value("Word").toString().trimmed();
+    if (word.isEmpty()) return {};
+    QStringList forms{word};
+    const auto recordedForms = record.value("Forms").toObject();
+    const QRegularExpression separators(QStringLiteral("[,;/，；、\\n]+"));
+    for (const auto &key : {"Plural", "ThirdPerson", "PresentParticiple", "Past", "PastParticiple"}) {
+        for (const auto &form : recordedForms.value(key).toString().split(separators)) {
+            if (!form.trimmed().isEmpty()) forms.append(form.trimmed());
+        }
+    }
+    forms.removeDuplicates();
+    std::sort(forms.begin(), forms.end(), [](const QString &a, const QString &b) { return a.size() > b.size(); });
+    for (auto &form : forms) form = QRegularExpression::escape(form);
+    QString pattern = "(?:" + forms.join('|') + ")";
+    if (!word.contains(QRegularExpression(QStringLiteral("\\p{Han}"))))
+        pattern = QStringLiteral("(?<![\\p{L}\\p{N}_])") + pattern + QStringLiteral("(?![\\p{L}\\p{N}_])");
+    const QRegularExpression target(pattern, QRegularExpression::CaseInsensitiveOption);
+    ClozeExample selected;
+    QSet<QString> seen;
+    int rank = 0;
+    double bestScore = std::numeric_limits<double>::infinity();
+    for (const auto &meaning : record.value("Meanings").toArray()) {
+        for (const auto &value : meaning.toObject().value("Senses").toArray()) {
+            const auto sense = value.toObject();
+            auto examples = sense.value("Examples").toArray();
+            if (examples.isEmpty() && !sense.value("Example").toString().isEmpty())
+                examples.append(QJsonObject{{"Text", sense.value("Example")}});
+            for (const auto &example : examples) {
+                ++rank;
+                const auto text = (example.isString() ? example.toString() : example.toObject().value("Text").toString()).trimmed();
+                if (text.isEmpty() || seen.contains(text)) continue;
+                seen.insert(text);
+                auto matches = target.globalMatch(text);
+                QString masked, answer;
+                int offset = 0;
+                bool consistent = true;
+                while (matches.hasNext()) {
+                    const auto match = matches.next();
+                    if (answer.isEmpty()) answer = match.captured();
+                    if (answer.compare(match.captured(), Qt::CaseInsensitive) != 0) {
+                        consistent = false;
+                        break;
+                    }
+                    masked += text.mid(offset, match.capturedStart() - offset) + QStringLiteral("____");
+                    offset = match.capturedEnd();
+                }
+                if (answer.isEmpty() || !consistent) continue;
+                masked += text.mid(offset);
+                // First example has weight 1, second 1/2, third 1/3, etc.
+                const auto score = reviewScore(-std::log(double(rank)));
+                if (score < bestScore) {
+                    bestScore = score;
+                    selected = {masked, answer, {}, example.toObject().value("Chinese").toString()};
+                    const auto segments = example.toObject().value("Segments").toArray();
+                    QString whole;
+                    for (auto part : segments) whole += part.toObject().value("Text").toString();
+                    if (whole == text) {
+                        QList<QPair<int,int>> spans;
+                        auto hits = target.globalMatch(text);
+                        while (hits.hasNext()) { const auto hit = hits.next(); spans.append({int(hit.capturedStart()), int(hit.capturedEnd())}); }
+                        int position = 0;
+                        for (auto part : segments) {
+                            auto segment = part.toObject();
+                            const auto original = segment.value("Text").toString();
+                            QString replacement;
+                            for (int i = 0; i < original.size(); ++i) {
+                                const int absolute = position + i;
+                                bool covered = false;
+                                for (const auto &span : spans) {
+                                    if (absolute >= span.first && absolute < span.second) {
+                                        if (absolute == span.first) replacement += "____";
+                                        covered = true; break;
+                                    }
+                                }
+                                if (!covered) replacement += original.at(i);
+                            }
+                            position += original.size();
+                            segment.insert("Text", replacement);
+                            if (!replacement.isEmpty()) selected.segments.append(segment);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return selected;
+}
+
 QVariantList filterValues(QString filter, bool favoritesOnly) {
     filter = filter.trimmed().toLower();
     return {favoritesOnly ? 1 : 0, nonNull(filter), nonNull(filter), nonNull(filter)};
@@ -354,11 +432,13 @@ QString detectPair(QString text) {
 }
 QString normalizeWord(QString text) { return text.trimmed().normalized(QString::NormalizationForm_C).toLower(); }
 bool isDeepSeek(const QJsonObject &entry) {
-    return entry.value(QStringLiteral("LookupSource")).toString().compare(QStringLiteral("DeepSeek"), Qt::CaseInsensitive) == 0
+    return entry.value(QStringLiteral("LookupSource")).toString()=="DailyWord"
+        || entry.value(QStringLiteral("LookupSource")).toString().compare(QStringLiteral("DeepSeek"), Qt::CaseInsensitive) == 0
         || entry.value(QStringLiteral("TranslationProvider")).toString().compare(QStringLiteral("DeepSeek"), Qt::CaseInsensitive) == 0;
 }
 QString sourceKey(QJsonObject entry) {
     QString identity = entryPair(entry) + QLatin1Char('|') + normalizeWord(entry.value(QStringLiteral("Word")).toString());
+    if(entry.value("LookupSource").toString()=="DailyWord")return "DailyWord|"+identity;
     if (isDeepSeek(entry)) return QStringLiteral("DeepSeek|") + entry.value(QStringLiteral("QueryEndpoint")).toString() + QLatin1Char('|') + entry.value(QStringLiteral("LookupModel")).toString() + QLatin1Char('|') + identity;
     QString provider = entry.value(QStringLiteral("TranslationProvider")).toString(QStringLiteral("MyMemory"));
     return provider + QLatin1Char('|') + (provider == QStringLiteral("LibreTranslate") ? entry.value(QStringLiteral("TranslationUrl")).toString() : QString()) + QLatin1Char('|') + identity;
@@ -375,6 +455,9 @@ QJsonObject defaultSettings() {
     QJsonObject ai{{QStringLiteral("Enabled"), false}, {QStringLiteral("ApiKey"), QStringLiteral("")}, {QStringLiteral("Endpoint"), QStringLiteral("https://api.deepseek.com/chat/completions")}, {QStringLiteral("Model"), QStringLiteral("deepseek-flash")}, {QStringLiteral("TimeoutSeconds"), 90}, {QStringLiteral("MaxTokens"), 8192}};
     QJsonObject sync{{QStringLiteral("Enabled"), true}, {QStringLiteral("Repository"), QStringLiteral("git@gitee.com:hippo-yf/MyDict-Cache.git")}, {QStringLiteral("PrivateKeyPath"), QStringLiteral("")}, {QStringLiteral("KnownHostsPath"), QStringLiteral("")}, {QStringLiteral("DeviceId"), QStringLiteral("")}};
     QJsonObject result{{QStringLiteral("username"), QStringLiteral("")}, {QStringLiteral("DeepSeek"), ai}, {QStringLiteral("CacheSync"), sync}, {QStringLiteral("FontName"), QStringLiteral("Microsoft YaHei UI")}, {QStringLiteral("FontSize"), 14}, {QStringLiteral("DefinitionFontName"), QStringLiteral("Georgia")}, {QStringLiteral("DelayMs"), 650}, {QStringLiteral("Provider"), QStringLiteral("MyMemory")}, {QStringLiteral("LibreUrl"), QStringLiteral("https://libretranslate.com/translate")}, {QStringLiteral("ApiKey"), QStringLiteral("")}, {QStringLiteral("ProtectedApiKey"), QJsonValue::Null}, {QStringLiteral("ShowExamples"), true}, {QStringLiteral("ShowDerived"), true}, {QStringLiteral("Window"), QJsonValue::Null}, {QStringLiteral("Styles"), QJsonObject()}, {QStringLiteral("_配置版本"), 3}};
+    result.insert("DailyWord",QJsonObject{{"ShowImage",true},{"Enabled",true},{"TimeZone","Asia/Shanghai"},{"Difficulty","中等"},{"MaxRequestsPerDay",2},{"RepeatDays",90},{"Model",""},
+        {"Feeds",QJsonArray{QJsonObject{{"Topic","科学"},{"Name","The Guardian · Science"},{"Url","https://www.theguardian.com/science/rss"}},QJsonObject{{"Topic","新闻"},{"Name","The Guardian · World"},{"Url","https://www.theguardian.com/world/rss"}},QJsonObject{{"Topic","社会"},{"Name","The Guardian · Society"},{"Url","https://www.theguardian.com/society/rss"}}}}});
+
     QFile resource(QStringLiteral(":/settings.example.json"));
     if (resource.open(QIODevice::ReadOnly)) {
         auto object = QJsonDocument::fromJson(resource.readAll()).object();
@@ -451,10 +534,13 @@ void Database::initialize() {
         QStringLiteral("CREATE TABLE IF NOT EXISTS deleted_words(normalized TEXT NOT NULL,pair TEXT NOT NULL,deleted_ticks INTEGER NOT NULL,PRIMARY KEY(normalized,pair))"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS history(position INTEGER PRIMARY KEY,source_key TEXT NOT NULL)"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS import_errors(id INTEGER PRIMARY KEY,word TEXT NOT NULL,error TEXT NOT NULL,at TEXT NOT NULL)"),
+        QStringLiteral("CREATE TABLE IF NOT EXISTS review_weights(word_id INTEGER PRIMARY KEY,log_weight REAL NOT NULL DEFAULT 0,last_answer TEXT NOT NULL DEFAULT '')"),
+        QStringLiteral("CREATE TRIGGER IF NOT EXISTS remove_review_weight AFTER DELETE ON words BEGIN DELETE FROM review_weights WHERE word_id=OLD.id; END"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS source_word ON sources(word_id,ticks DESC)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS word_recent ON words(last_ticks DESC,id DESC)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS word_favorite ON words(favorite,last_ticks DESC,id DESC)")};
     for (const auto &sql : schema) query(c.db, sql);
+    query(c.db, "CREATE TABLE IF NOT EXISTS daily_articles(day TEXT PRIMARY KEY,word TEXT NOT NULL,created_at TEXT NOT NULL,payload BLOB NOT NULL)");
     setMeta(c.db, QStringLiteral("username"), user); setMeta(c.db, QStringLiteral("schema"), QStringLiteral("1"));
     setMeta(c.db, QStringLiteral("payload_format"), PayloadFormat);
     query(c.db, QStringLiteral("INSERT OR IGNORE INTO metadata(key,value) VALUES('revision','0'),('synced','0'),('cursor','-1'),('word_sequence','0')"));
@@ -578,14 +664,9 @@ void Database::recordImportError(QString word, QString error) {
     query(c.db, QStringLiteral("INSERT INTO import_errors(word,error,at) VALUES(?,?,?)"), {nonNull(word), nonNull(error), isoNow()});
     tx.commit();
 }
-bool Database::remove(qint64 id) {
-    Connection c(filePath); verify(c.db, user); Transaction tx(c.db);
-    auto row = query(c.db, QStringLiteral("SELECT normalized,pair,favorite,last_ticks,favorite_at FROM words WHERE id=?"), {id});
-    if (!row.next() || row.value(2).toBool()) { row.finish(); tx.commit(); return false; }
-    QString word = row.value(0).toString(), pair = row.value(1).toString();
-    qint64 latest = std::max(row.value(3).toLongLong(), timeTicks(row.value(4).toString())); row.finish();
-    qint64 ticks = std::max(utcTicks(), std::max(latest, deletedAt(c.db, word, pair))) + 1;
-    deleteCore(c.db, word, pair, ticks); dirty(c.db); tx.commit(); return true;
+bool Database::remove(qint64) {
+    // Cache entries are append/update only, including unfavorited words.
+    return false;
 }
 BookPage Database::page(QString filter, bool favoritesOnly, int offset, int limit) const {
     limit = std::max(1, std::min(100, limit)); offset = std::max(0, offset);
@@ -593,13 +674,162 @@ BookPage Database::page(QString filter, bool favoritesOnly, int offset, int limi
     auto parameters = filterValues(filter, favoritesOnly); BookPage result;
     result.total = scalar(c.db, QStringLiteral("SELECT COUNT(*) FROM words w") + likeWhere(), parameters).toInt();
     parameters << limit << offset;
-    auto rows = query(c.db, QStringLiteral("SELECT w.id,w.word,w.pair,w.summary,w.favorite,EXISTS(SELECT 1 FROM sources s WHERE s.word_id=w.id AND s.is_ai=1),EXISTS(SELECT 1 FROM sources s WHERE s.word_id=w.id AND s.is_ai=0) FROM words w") + likeWhere() + QStringLiteral(" ORDER BY w.last_ticks DESC,w.id DESC LIMIT ? OFFSET ?"), parameters);
+    const bool weightsAvailable = hasTable(c.db, QStringLiteral("review_weights"));
+    const auto weightJoin = weightsAvailable ? QStringLiteral(" LEFT JOIN review_weights r ON r.word_id=w.id") : QString();
+    const auto weightOrder = weightsAvailable ? QStringLiteral("COALESCE(r.log_weight,0) DESC,") : QString();
+    auto rows = query(c.db, QStringLiteral("SELECT w.id,w.word,w.pair,w.summary,w.favorite,EXISTS(SELECT 1 FROM sources s WHERE s.word_id=w.id AND s.is_ai=1),EXISTS(SELECT 1 FROM sources s WHERE s.word_id=w.id AND s.is_ai=0) FROM words w") + weightJoin + likeWhere() + QStringLiteral(" ORDER BY ") + weightOrder + QStringLiteral("w.last_ticks DESC,w.id DESC LIMIT ? OFFSET ?"), parameters);
     while (rows.next()) {
         BookRow row; row.id = rows.value(0).toLongLong(); row.word = rows.value(1).toString(); row.pair = rows.value(2).toString(); row.summary = rows.value(3).toString();
         row.favorite = rows.value(4).toBool(); row.hasAi = rows.value(5).toBool(); row.hasOnline = rows.value(6).toBool(); result.rows.append(row);
     }
     return result;
 }
+ReviewQuestion Database::reviewQuestion(bool sentenceMode) const {
+    Connection c(filePath, true);
+    verify(c.db, user);
+    query(c.db, QStringLiteral("BEGIN"));
+    QSqlQuery rows(c.db);
+    rows.setForwardOnly(true);
+    if (!rows.prepare(QStringLiteral(
+            "SELECT w.id,w.word,w.pair,w.summary,COALESCE(r.log_weight,0) "
+            "FROM words w LEFT JOIN review_weights r ON r.word_id=w.id "
+            "WHERE w.favorite=1 AND (?=1 OR trim(w.summary)<>'')")))
+        fail(QStringLiteral("无法准备复习词条：") + rows.lastError().text());
+    rows.addBindValue(sentenceMode ? 1 : 0);
+    if (!rows.exec())
+        fail(QStringLiteral("无法读取复习词条：") + rows.lastError().text());
+
+    ReviewQuestion result;
+    QString answer, answerMeaning;
+    double bestScore = std::numeric_limits<double>::infinity();
+    // Exponential racing samples proportionally to weight using one streamed
+    // row at a time. Log weights avoid overflow/underflow after many reviews.
+    while (rows.next()) {
+        const auto summary = rows.value(3).toString().trimmed();
+        if (!sentenceMode && summary.isEmpty()) continue;
+        double logWeight = rows.value(4).toDouble();
+        if (!std::isfinite(logWeight)) logWeight = 0;
+        const double score = reviewScore(logWeight);
+        if (score >= bestScore) continue;
+        ClozeExample example;
+        if (sentenceMode) {
+            // Decode only potential winners, one cached source at a time.
+            auto sources = query(c.db, QStringLiteral(
+                "SELECT payload FROM sources WHERE word_id=? ORDER BY is_ai DESC,(source_key LIKE 'DailyWord|%') ASC,ticks DESC,source_key"), {rows.value(0)});
+            while (sources.next()) {
+                try { example = clozeExample(decode(sources.value(0).toByteArray())); }
+                catch (const std::exception &) { continue; }
+                if (!example.first.isEmpty()) break;
+            }
+            if (example.first.isEmpty()) continue;
+        }
+        bestScore = score;
+        result.wordId = rows.value(0).toLongLong();
+        result.word = rows.value(1).toString();
+        result.pair = rows.value(2).toString();
+        result.sentence = example.first;
+        result.sentenceSegments = example.segments;
+        result.sentenceChinese = example.chinese;
+        answerMeaning = summary;
+        answer = sentenceMode ? example.second : summary;
+    }
+    rows.finish();
+    if (!result.wordId)
+        fail(sentenceMode ? QStringLiteral("收藏词中没有可用于填空的例句。请先查询并保存包含该词或其词形的例句。")
+                          : QStringLiteral("还没有可复习的收藏单词。请先收藏带有摘要释义的单词。"));
+
+    result.options.append(answer);
+    QHash<QString,QString> meanings{{answer, answerMeaning}};
+    QSet<QString> seen{answer.simplified().toCaseFolded()};
+    const auto alternativeSql = sentenceMode
+        ? QStringLiteral("SELECT word,summary FROM words WHERE normalized<>? AND pair=? AND trim(word)<>'' ORDER BY random()")
+        : QStringLiteral("SELECT summary FROM words WHERE normalized<>? AND trim(summary)<>'' ORDER BY random()");
+    QVariantList alternativeParameters{normalizeWord(result.word)};
+    if (sentenceMode) alternativeParameters.append(result.pair);
+    auto alternatives = query(c.db, alternativeSql, alternativeParameters);
+    while (result.options.size() < 4 && alternatives.next()) {
+        const auto summary = alternatives.value(0).toString().trimmed();
+        const auto key = summary.simplified().toCaseFolded();
+        if (key.isEmpty() || seen.contains(key)) continue;
+        seen.insert(key);
+        result.options.append(summary);
+        if (sentenceMode) meanings.insert(summary, alternatives.value(1).toString());
+    }
+    alternatives.finish();
+    if (result.options.size() != 4)
+        fail(sentenceMode ? QStringLiteral("单词本中缺少三个同语言的干扰单词，请先添加更多单词。")
+                          : QStringLiteral("当前单词缺少三个不同的干扰释义，请先在单词本中添加更多带有不同摘要释义的单词。"));
+    std::shuffle(result.options.begin(), result.options.end(), *QRandomGenerator::global());
+    for (const auto &option : result.options) result.meanings.append(meanings.value(option));
+    result.correctIndex = result.options.indexOf(answer);
+    result.token = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    return result;
+}
+
+bool Database::answerReview(const ReviewQuestion &question, int selected) {
+    if (question.token.isEmpty() || question.options.size() != 4 || selected < -1 || selected >= 4
+        || question.correctIndex < 0 || question.correctIndex >= 4)
+        fail(QStringLiteral("复习题目无效，请重新开始。"));
+    Connection c(filePath);
+    verify(c.db, user);
+    Transaction tx(c.db);
+    if (!scalar(c.db, QStringLiteral(
+            "SELECT EXISTS(SELECT 1 FROM words WHERE id=? AND normalized=? AND pair=? AND favorite=1)"),
+            {question.wordId, normalizeWord(question.word), question.pair}).toBool()) {
+        tx.commit();
+        return false;
+    }
+    query(c.db, QStringLiteral("INSERT OR IGNORE INTO review_weights(word_id) VALUES(?)"), {question.wordId});
+    query(c.db, QStringLiteral(
+        "UPDATE review_weights SET log_weight=log_weight+?,last_answer=? WHERE word_id=? AND last_answer<>?"),
+        {std::log(selected == question.correctIndex ? 0.7 : 1.3), question.token, question.wordId, question.token});
+    tx.commit();
+    return true;
+}
+
+QJsonObject Database::dailyArticle(QString date) const {
+    Connection c(filePath,true);verify(c.db,user);
+    auto row=date.isEmpty()?query(c.db,"SELECT payload FROM daily_articles ORDER BY day DESC LIMIT 1"):
+        query(c.db,"SELECT payload FROM daily_articles WHERE day=?",{date});
+    return row.next()?QJsonDocument::fromJson(row.value(0).toByteArray()).object():QJsonObject();
+}
+QJsonArray Database::dailyHistory(int offset,int limit) const {
+    Connection c(filePath,true);verify(c.db,user);QJsonArray result;
+    auto rows=query(c.db,"SELECT day,word FROM daily_articles ORDER BY day DESC LIMIT ? OFFSET ?",{qBound(1,limit,50),qMax(0,offset)});
+    while(rows.next())result.append(QJsonObject{{"Date",rows.value(0).toString()},{"Word",rows.value(1).toString()}});
+    return result;
+}
+QStringList Database::recentDailyWords(int days) const {
+    Connection c(filePath,true);verify(c.db,user);QStringList result;
+    auto rows=query(c.db,"SELECT word FROM daily_articles WHERE day>=? ORDER BY day DESC LIMIT 365",{QDate::currentDate().addDays(-qBound(1,days,365)).toString(Qt::ISODate)});
+    while(rows.next())result.append(rows.value(0).toString());return result;
+}
+bool Database::beginDailyRequest(QString date,int limit,bool existingAllowed) {
+    Connection c(filePath);verify(c.db,user);Transaction tx(c.db);
+    const QString key="daily_request:"+date, lease="daily_lease:"+date;
+    if(!existingAllowed&&scalar(c.db,"SELECT COUNT(*) FROM daily_articles WHERE day=?",{date}).toInt()>0){tx.commit();return false;}
+    if(meta(c.db,lease).toLongLong()>QDateTime::currentMSecsSinceEpoch())fail("今日词汇正在生成，请稍后重试。");
+    const int count=meta(c.db,key).toInt();if(count>=qBound(1,limit,10))fail("今日词汇已达到今天的生成次数上限。");
+    setMeta(c.db,key,QString::number(count+1));setMeta(c.db,lease,QString::number(QDateTime::currentMSecsSinceEpoch()+600000));tx.commit();return true;
+}
+void Database::endDailyRequest(QString date){Connection c(filePath);verify(c.db,user);Transaction tx(c.db);setMeta(c.db,"daily_lease:"+date,"0");tx.commit();}
+void Database::saveDailyArticle(QJsonObject article){
+    const auto day=article.value("Date").toString(),word=article.value("Word").toString(),created=article.value("CreatedAt").toString();
+    if(!QDate::fromString(day,Qt::ISODate).isValid()||word.trimmed().isEmpty()||!QDateTime::fromString(created,Qt::ISODateWithMs).isValid()||article.value("Entry").toObject().isEmpty())fail("今日词汇内容不完整。");
+    Connection c(filePath);verify(c.db,user);Transaction tx(c.db);
+    const auto payload=QJsonDocument(article).toJson(QJsonDocument::Compact);
+    auto previous=query(c.db,"SELECT payload FROM daily_articles WHERE day=?",{day});
+    if(previous.next()){
+        auto oldBytes=previous.value(0).toByteArray();auto old=QJsonDocument::fromJson(oldBytes).object();
+        const auto oldCreated=old.value("CreatedAt").toString();
+        const auto oldSummary=qMax(old.value("SummaryUpdatedAt").toString(),old.value("ImageUpdatedAt").toString()),newSummary=qMax(article.value("SummaryUpdatedAt").toString(),article.value("ImageUpdatedAt").toString());
+        if(created>oldCreated||(created==oldCreated&&(newSummary<oldSummary||(newSummary==oldSummary&&payload>=oldBytes)))){previous.finish();tx.commit();return;}
+    }
+    previous.finish();
+    query(c.db,"INSERT OR REPLACE INTO daily_articles(day,word,created_at,payload) VALUES(?,?,?,?)",{day,word,created,payload});
+    dirty(c.db);tx.commit();
+}
+
 QJsonObject Database::navigate(int direction) {
     Connection c(filePath); verify(c.db, user); Transaction tx(c.db);
     qint64 cursor = meta(c.db, QStringLiteral("cursor")).toLongLong();
@@ -755,6 +985,10 @@ void Database::mergeFrom(QString sqlitePath) {
         flush();
     }
     mergeChanges(QStringLiteral("SELECT word,pair,favorite,favorite_at FROM words WHERE favorite_at<>''"), false);
+    if(hasTable(remote.db,"daily_articles")) {
+        auto articles=query(remote.db,"SELECT payload FROM daily_articles ORDER BY day");
+        while(articles.next())saveDailyArticle(QJsonDocument::fromJson(articles.value(0).toByteArray()).object());
+    }
     Connection local(filePath); verify(local.db, user); Transaction tx(local.db); setMeta(local.db, key, fingerprint); tx.commit();
 }
 void Database::backupTo(QString destination) const {

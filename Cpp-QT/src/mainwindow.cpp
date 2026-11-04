@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "dailypage.h"
 #include "entryrenderer.h"
 #include "appfonts.h"
 #include "services.h"
@@ -19,6 +20,10 @@
 #include <QMessageBox>
 #include <QClipboard>
 #include <QScrollBar>
+#include <QScrollArea>
+#include <QComboBox>
+#include <QSpinBox>
+#include <QStyle>
 #include <QMenu>
 #include <QShortcut>
 #include <QScreen>
@@ -48,6 +53,26 @@
 
 namespace MyDict {
 namespace {
+// QPushButton normally measures only its own caption, ignoring child labels.
+// Include the option/meaning layout and its wrapped height in geometry negotiation.
+class ReviewChoiceButton : public QPushButton {
+public:
+    ReviewChoiceButton() {
+        QSizePolicy policy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+        policy.setHeightForWidth(true);
+        setSizePolicy(policy);
+    }
+    QSize sizeHint() const override {
+        return layout() ? layout()->totalSizeHint().expandedTo(QSize(0, 56)) : QPushButton::sizeHint();
+    }
+    QSize minimumSizeHint() const override {
+        return QSize(0, layout() ? qMax(56, layout()->totalMinimumSize().height()) : 56);
+    }
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override {
+        return layout() ? qMax(minimumSizeHint().height(), layout()->totalHeightForWidth(width)) : 56;
+    }
+};
 template<class T> struct AsyncResult { T value{}; QString error; };
 template<class Work, class Done>
 void background(QObject *owner, Work work, Done done, std::function<void(QString)> failed) {
@@ -151,6 +176,7 @@ MainWindow::MainWindow(QString dataDirectory, QWidget *parent)
 MainWindow::~MainWindow() {
     qApp->removeEventFilter(this);
     if(syncCanceled)syncCanceled->store(true);
+    if(dailyPage)dailyPage->cancel();
     emit cancelOnline(); networkThread.quit(); networkThread.wait();
 }
 
@@ -162,7 +188,7 @@ void MainWindow::createUi() {
     lookupTab = new QPushButton(QStringLiteral("查词")); lookupTab->setObjectName("lookupTab"); lookupTab->setCheckable(true); lookupTab->setChecked(true);
     bookTab = new QPushButton(QStringLiteral("单词本")); bookTab->setObjectName("bookTab"); bookTab->setCheckable(true);
     lookupTab->setProperty("tab", true); bookTab->setProperty("tab", true);
-    title->addWidget(lookupTab); title->addWidget(bookTab); title->addStretch();
+    title->addWidget(lookupTab); title->addWidget(bookTab); dailyTab=new QPushButton("今日词汇");dailyTab->setObjectName("dailyTab");dailyTab->setProperty("tab",true);dailyTab->setCheckable(true);title->addWidget(dailyTab); title->addStretch();
     sync = new QPushButton(QStringLiteral("同步")); sync->setObjectName("syncButton"); sync->setFixedHeight(28); title->addWidget(sync);
     auto titleButton = [title](const QString &name, const QString &label) {
         auto *button = new QPushButton; button->setObjectName(name); button->setAccessibleName(label); button->setIcon(vectorIcon(name, Qt::white)); button->setFixedSize(30,32); title->addWidget(button); return button;
@@ -198,14 +224,109 @@ void MainWindow::createUi() {
     auto *bookPage = new QWidget; auto *bookLayout = new QVBoxLayout(bookPage); bookLayout->setContentsMargins(10,5,10,5); bookLayout->setSpacing(4);
     auto *bookBar = new QHBoxLayout; bookBar->setSpacing(6);
     filter = new QLineEdit; filter->setObjectName("bookFilter"); filter->setPlaceholderText(QStringLiteral("筛选单词或释义")); filter->setClearButtonEnabled(true); filter->setMinimumHeight(32); bookBar->addWidget(filter,1);
-    favoritesOnly = new QCheckBox(QStringLiteral("仅收藏")); favoritesOnly->setObjectName("favoritesOnly"); bookBar->addWidget(favoritesOnly);
+    auto *reviewStart = new QPushButton(QStringLiteral("复习"));
+    reviewStart->setObjectName("reviewStart");
+    bookBar->addWidget(reviewStart);
+    connect(reviewStart, &QPushButton::clicked, this, &MainWindow::startReview);
     auto *exportButton = new QPushButton(QStringLiteral("导出")); exportButton->setObjectName("exportButton"); bookBar->addWidget(exportButton);
     auto *more = new QPushButton(QStringLiteral("⋯")); more->setObjectName("bookMore"); more->setFixedWidth(30); auto *menu = new QMenu(more); menu->addAction(QStringLiteral("导入词库文件…"), this, &MainWindow::importBook); more->setMenu(menu); bookBar->addWidget(more);
     bookLayout->addLayout(bookBar);
     book = new QListWidget; book->setObjectName("wordbook"); book->setSpacing(1); book->setUniformItemSizes(false); book->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); book->setFrameShape(QFrame::NoFrame); bookLayout->addWidget(book,1);
     emptyBook = new QLabel(QStringLiteral("暂无单词"), book); emptyBook->setObjectName("emptyBook"); emptyBook->setAlignment(Qt::AlignCenter); emptyBook->setAttribute(Qt::WA_TransparentForMouseEvents); emptyBook->hide();
-    auto *pager = new QHBoxLayout; pager->addStretch(); previous = new QPushButton; previous->setObjectName("bookPrevious"); previous->setIcon(vectorIcon("back", QColor("#5C4BB7"))); previous->setFixedSize(28,26); pageLabel = new QLabel("1 / 1"); pageLabel->setObjectName("bookPageLabel"); next = new QPushButton; next->setObjectName("bookNext"); next->setIcon(vectorIcon("forward", QColor("#5C4BB7"))); next->setFixedSize(28,26); pager->addWidget(previous); pager->addWidget(pageLabel); pager->addWidget(next); bookLayout->addLayout(pager);
+    auto *pager = new QHBoxLayout; pager->addStretch(); previous = new QPushButton; previous->setObjectName("bookPrevious"); previous->setIcon(vectorIcon("back", QColor("#5C4BB7"))); previous->setFixedSize(28,26); pageLabel = new QLabel("1 / 1"); pageLabel->setObjectName("bookPageLabel"); next = new QPushButton; next->setObjectName("bookNext"); next->setIcon(vectorIcon("forward", QColor("#5C4BB7"))); next->setFixedSize(28,26); pager->addWidget(previous); pageJump=new QSpinBox; pageJump->setObjectName("bookPageJump"); pageJump->setRange(1,1); pageJump->setKeyboardTracking(false); pageJump->setMinimumWidth(70); pageJump->setAccessibleName(QStringLiteral("跳转页码")); pager->addWidget(pageJump); pager->addWidget(pageLabel); pager->addWidget(next); bookLayout->addLayout(pager);
     pages->addWidget(bookPage);
+    auto *reviewPage = new QWidget;
+    reviewPage->setObjectName("reviewPage");
+    auto *reviewLayout = new QVBoxLayout(reviewPage);
+    reviewLayout->setContentsMargins(14,10,14,10);
+    reviewLayout->setSpacing(10);
+    auto *reviewHeader = new QHBoxLayout;
+    reviewMode = new QComboBox;
+    reviewMode->setObjectName("reviewMode");
+    reviewMode->setMinimumContentsLength(7);
+    reviewMode->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    reviewMode->setAccessibleName(QStringLiteral("复习方式"));
+    reviewMode->addItems({QStringLiteral("释义选择"), QStringLiteral("选词填空")});
+    reviewHeader->addWidget(reviewMode);
+    connect(reviewMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        if (pages->currentIndex() == 2 && initialized && !reviewBusy) nextReview();
+    });
+    reviewHeader->addStretch();
+    reviewUnfamiliar = new QPushButton(QStringLiteral("不太熟"));
+    reviewUnfamiliar->setObjectName("reviewUnfamiliar");
+    reviewHeader->addWidget(reviewUnfamiliar);
+    connect(reviewUnfamiliar, &QPushButton::clicked, this, [this] {
+        if (reviewAnswered || review.token.isEmpty()) advanceReview();
+        else chooseReviewAnswer(-1);
+    });
+    reviewExit = new QPushButton(QStringLiteral("退出复习 ×"));
+    reviewExit->setObjectName("reviewExit");
+    reviewHeader->addWidget(reviewExit);
+    connect(reviewExit, &QPushButton::clicked, this, [this] { leaveReview(); });
+    reviewLayout->addLayout(reviewHeader);
+    reviewScroll = new QScrollArea;
+    reviewScroll->setWidgetResizable(true);
+    reviewScroll->setFrameShape(QFrame::NoFrame);
+    auto *reviewContent = new QWidget;
+    auto *questions = new QVBoxLayout(reviewContent);
+    questions->setContentsMargins(4,4,4,4);
+    questions->setSpacing(12);
+    reviewWord = new QLabel;
+    reviewWord->setObjectName("reviewWord");
+    reviewWord->setTextFormat(Qt::PlainText);
+    reviewWord->setWordWrap(true);
+    reviewWord->setAlignment(Qt::AlignCenter);
+    reviewWord->setMinimumHeight(62);
+    questions->addWidget(reviewWord);
+    reviewPrompt = new QLabel(QStringLiteral("选择正确的释义"));
+    reviewPrompt->setAlignment(Qt::AlignCenter);
+    reviewPrompt->setWordWrap(true);
+    reviewPrompt->setTextFormat(Qt::PlainText);
+    reviewPrompt->setObjectName("reviewPrompt");
+    auto promptPolicy = reviewPrompt->sizePolicy();
+    promptPolicy.setRetainSizeWhenHidden(true);
+    reviewPrompt->setSizePolicy(promptPolicy);
+    questions->addWidget(reviewPrompt);
+    for (int i = 0; i < 4; ++i) {
+        auto *choice = new ReviewChoiceButton;
+        choice->setObjectName(QStringLiteral("reviewChoice%1").arg(i));
+        choice->setProperty("reviewChoice", true);
+        choice->setMinimumHeight(56);
+        auto *choiceLayout = new QVBoxLayout(choice);
+        choiceLayout->setSpacing(4);
+        choiceLayout->setContentsMargins(14,10,14,10);
+        auto *label = new QLabel;
+        label->setTextFormat(Qt::PlainText);
+        label->setWordWrap(true);
+        label->setAttribute(Qt::WA_TransparentForMouseEvents);
+        label->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        choiceLayout->addWidget(label);
+        auto *meaningLabel = new QLabel;
+        meaningLabel->setObjectName("reviewChoiceMeaning");
+        meaningLabel->setTextFormat(Qt::PlainText);
+        meaningLabel->setWordWrap(true);
+        meaningLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        meaningLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+        auto meaningPolicy = meaningLabel->sizePolicy();
+        meaningPolicy.setRetainSizeWhenHidden(true);
+        meaningLabel->setSizePolicy(meaningPolicy);
+        choiceLayout->addWidget(meaningLabel);
+        meaningLabel->hide();
+        questions->addWidget(choice);
+        reviewChoices.append(choice);
+        connect(choice, &QPushButton::clicked, this, [this,i] { chooseReviewAnswer(i); });
+    }
+    questions->addStretch();
+    reviewScroll->setWidget(reviewContent);
+    reviewLayout->addWidget(reviewScroll,1);
+    pages->addWidget(reviewPage);
+    dailyPage=new DailyPage;pages->addWidget(dailyPage);
+    connect(dailyTab,&QPushButton::clicked,this,[this]{pages->setCurrentIndex(3);if(initialized){dailyPage->configure(database,settings.data);dailyPage->activate();}});
+    connect(pages,&QStackedWidget::currentChanged,this,[this](int page){lookupTab->setChecked(page==0);bookTab->setChecked(page==1||page==2);dailyTab->setChecked(page==3);});
+    connect(dailyPage,&DailyPage::lookupRequested,this,[this](QString word){pages->setCurrentIndex(0);{QSignalBlocker block(input);input->setText(word);}lookup(false,false,true);});
+    connect(dailyPage,&DailyPage::workStarted,this,[this]{++pendingWrites;});
+    connect(dailyPage,&DailyPage::workFinished,this,&MainWindow::writeFinished);
+    connect(dailyPage,&DailyPage::changed,this,[this]{dirty();refreshFavoriteState();});
     notice = new QLabel(root); notice->setObjectName("notice"); notice->setWordWrap(true); notice->setAlignment(Qt::AlignCenter); notice->setAttribute(Qt::WA_TransparentForMouseEvents); notice->hide();
     auto *grip = new QSizeGrip(root); grip->setFixedSize(12,12); auto *bottom = new QHBoxLayout; bottom->setContentsMargins(0,0,1,0); bottom->addStretch(); bottom->addWidget(grip); layout->addLayout(bottom);
     inputDelay = new QTimer(this); inputDelay->setSingleShot(true);
@@ -226,9 +347,9 @@ void MainWindow::createUi() {
     connect(copy, &QPushButton::clicked, this, [this] { QApplication::clipboard()->setText(browser->toPlainText().remove(QChar::ObjectReplacementCharacter).trimmed()); toast(QStringLiteral("已复制释义")); });
     connect(back, &QPushButton::clicked, this, [this] { navigate(-1); }); connect(forward, &QPushButton::clicked, this, [this] { navigate(1); });
     connect(lookupTab, &QPushButton::clicked, this, [this] { pages->setCurrentIndex(0); lookupTab->setChecked(true); bookTab->setChecked(false); input->setFocus(); });
-    connect(bookTab, &QPushButton::clicked, this, [this] { pages->setCurrentIndex(1); lookupTab->setChecked(false); bookTab->setChecked(true); refreshBook(); });
+    connect(pageJump, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int page) { offset=(page-1)*50; refreshBook(); });
+    connect(bookTab, &QPushButton::clicked, this, [this] { pages->setCurrentIndex(reviewActive ? 2 : 1); lookupTab->setChecked(false); bookTab->setChecked(true); if (!reviewActive && initialized) refreshBook(); });
     connect(filter, &QLineEdit::textChanged, this, [this] { offset=0; filterDelay->start(); }); connect(filterDelay, &QTimer::timeout, this, &MainWindow::refreshBook);
-    connect(favoritesOnly, &QCheckBox::toggled, this, [this] { offset=0; refreshBook(); });
     connect(previous, &QPushButton::clicked, this, [this] { offset=qMax(0,offset-50); refreshBook(); }); connect(next, &QPushButton::clicked, this, [this] { if(offset+50<total) {offset+=50;refreshBook();} });
     connect(book, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
         if (!initialized) return;auto db=database;const auto word=item->data(Qt::UserRole+1).toString(),pair=item->data(Qt::UserRole+2).toString();const bool ai=useDeepSeek();inputDelay->stop();++requestId;emit cancelOnline();auto revision=requestId;query->setText(QStringLiteral("查询中"));
@@ -254,6 +375,7 @@ void MainWindow::initialize() {
     struct Initial {HistorySelection selection;bool dirty=false;};
     background(this,[db,ai]() mutable {db.initialize();return Initial{db.navigateForSource(0,ai),db.revision()>db.syncedRevision()};},[this,ai](Initial initial) {
         initialized=true;input->setEnabled(true);query->setEnabled(true);deepSeek->setEnabled(true);input->setFocus();updateHistory();
+        dailyPage->configure(database,settings.data);if(pages->currentIndex()==3)dailyPage->activate();
         if(initial.dirty)dirty();
         if(!initial.selection.word.isEmpty()&&input->text().isEmpty()){showSelection(initial.selection);if(ai!=useDeepSeek())lookup(false,false,false,true);}
         if(pages->currentIndex()==1)refreshBook();
@@ -314,7 +436,7 @@ void MainWindow::applySettings(bool restoreWindow) {
         "QWidget#titleBar{background:%3;}"
         "QWidget#titleBar QPushButton{color:white;border:0;background:transparent;font-weight:700;padding:5px;}"
         "QWidget#titleBar QPushButton:hover{background:#58456F;}"
-        "QWidget#titleBar QPushButton[tab=true]{min-width:64px;font-size:13pt;border-bottom:2px solid transparent;padding:8px 10px;}"
+        "QWidget#titleBar QPushButton[tab=true]{border-radius:0;min-width:64px;font-size:13pt;border-bottom:2px solid transparent;padding:8px 10px;}"
         "QWidget#titleBar QPushButton[tab=true]:checked{border-bottom:2px solid #C4B5FD;background:#493564;}"
         "QWidget#titleBar QPushButton#syncButton{background:%4;border-radius:5px;min-width:48px;font-size:10pt;padding:3px 8px;}"
         "QPushButton{border:0;border-radius:5px;padding:4px 8px;background:#EEEAF8;color:%4;}"
@@ -331,10 +453,24 @@ void MainWindow::applySettings(bool restoreWindow) {
         "QListWidget::item:selected{background:#EDE7FA;}QListWidget::item:hover{background:#F6F3FC;}"
         "QLabel#notice{border-radius:7px;padding:10px;font-size:11pt;background:#30234D;color:white;}"
         "QLabel#emptyBook{color:#92899F;background:transparent;}"
+        "QWidget#reviewPage QScrollArea,QWidget#reviewPage QScrollArea>QWidget>QWidget{background:transparent;}"
+        "QLabel#reviewWord{font-size:%5px;font-weight:900;color:%4;}"
+        "QLabel#reviewWord[sentenceQuestion=true]{font-size:%7px;font-weight:600;}"
+        "QComboBox#reviewMode{background:#EEEAF8;color:%4;border:1px solid #D8D0E5;border-radius:5px;padding:4px 8px;}"
+        "QPushButton[reviewChoice=true]{background:white;border:1px solid #D8D0E5;border-radius:8px;}"
+        "QPushButton[reviewChoice=true]:hover{background:#F0EBFA;border-color:%4;}"
+        "QPushButton[reviewChoice=true] QLabel{font-size:%6px;color:%2;background:transparent;}"
+        "QPushButton#reviewUnfamiliar{background:#EEE4D2;color:#805B21;font-weight:700;}"
         "QToolTip{height:0px;opacity:0;}QMenu{background:white;color:%2;}"
         "QMenu::item:selected{background:#EDE7FA;}"
-        ).arg(backgroundColor,foreground,purple,accent));
+        ).arg(backgroundColor,foreground,purple,accent)
+         .arg(qRound(32 * styleNumber(settings.data,"number.doc.scale",.9)))
+         .arg(qRound(18 * styleNumber(settings.data,"number.doc.scale",.9)))
+         .arg(qRound(23 * styleNumber(settings.data,"number.doc.scale",.9))));
     updateDeepSeek();
+    if(dailyPage)dailyPage->configure(database,settings.data);
+    if (reviewActive && !review.sentence.isEmpty())
+        reviewWord->setText(EntryRenderer::reviewSentence(review.sentence, review.sentenceSegments, settings.data));
     if(!currentEntry.isEmpty()){int scroll=browser->verticalScrollBar()->value();browser->setHtml(EntryRenderer::render(currentEntry,settings.data,selectedPart));browser->verticalScrollBar()->setValue(scroll);}
     else showMessage(messageTitle,messageText);
     if(restoreWindow) {
@@ -377,7 +513,9 @@ void MainWindow::reloadConfig() {
 }
 void MainWindow::requestIdentityChange(){
     if(switchingIdentity||pendingClose)return;
+    dailyPage->cancel();
     switchingIdentity=true;initialized=false;++requestId;++bookRevision;emit cancelOnline();inputDelay->stop();filterDelay->stop();
+    if (reviewActive) leaveReview(pages->currentIndex() == 0 ? 0 : 1);
     if(syncCanceled)syncCanceled->store(true);
     pages->setEnabled(false);currentEntry={};selectedPart.clear();book->clear();
     showMessage(QStringLiteral("正在切换词库"),settings.username());
@@ -405,10 +543,12 @@ void MainWindow::changeIdentity(){
                 writeFinished();
                 if(pendingClose)return;
                 if(settings.databasePath()!=targetPath){QTimer::singleShot(0,this,&MainWindow::changeIdentity);return;}
+                dailyPage->configure(nextDatabase,settings.data);
                 database=nextDatabase;profileLock=nextLock;activeUsername=targetUser;offset=0;total=0;firstDirtyAt=0;dirtyGeneration=0;
                 switchingIdentity=false;initialized=true;pages->setEnabled(true);input->setEnabled(true);query->setEnabled(true);deepSeek->setEnabled(true);star->setEnabled(false);copy->setEnabled(false);query->setText(QStringLiteral("查询"));
                 currentEntry={};selectedPart.clear();
                 showSelection(initial.selection);if(ai!=useDeepSeek())lookup(false,false,false,true);
+                if(pages->currentIndex()==3)dailyPage->activate();
                 if(initial.dirty)dirty();updateHistory();if(pages->currentIndex()==1)refreshBook();toast(QStringLiteral("已切换用户词库：")+targetUser);
                 if(settings.data.value("CacheSync").toObject().value("Enabled").toBool())runSync(true);
             },[this](QString error){writeFinished();if(pendingClose)return;switchingIdentity=false;pages->setEnabled(true);toast(error,true);initialize();});
@@ -506,9 +646,10 @@ void MainWindow::writeFavorite(QString word,QString pair,bool saved){
 
 void MainWindow::refreshBook(){
     if(!initialized||pendingClose)return;
-    const auto revision=++bookRevision;auto db=database;QString search=filter->text().trimmed();bool only=favoritesOnly->isChecked();int start=offset;
+    const auto revision=++bookRevision;auto db=database;QString search=filter->text().trimmed();bool only=true;int start=offset;
     background(this,[db,search,only,start]{return db.page(search,only,start,50);},[this,revision](BookPage page){
         if(revision!=bookRevision||pendingClose)return;total=page.total;
+        if(total==0)offset=0;
         if(total>0&&offset>=total){offset=((total-1)/50)*50;refreshBook();return;}
         book->clear();
         double wordSize=styleNumber(settings.data,"number.book.word_size",12.6),translationSize=styleNumber(settings.data,"number.book.translation_size",10.8);
@@ -519,10 +660,12 @@ void MainWindow::refreshBook(){
         int left=8,right=8,top=2,bottom=2;
         if(padding.size()==2){left=right=qBound(0,padding[0].toInt(),30);top=bottom=qBound(0,padding[1].toInt(),30);}
         else if(padding.size()==4){left=qBound(0,padding[0].toInt(),30);top=qBound(0,padding[1].toInt(),30);right=qBound(0,padding[2].toInt(),30);bottom=qBound(0,padding[3].toInt(),30);}
+        int rowNumber=0;
         for(const auto &row:page.rows){
             auto *item=new QListWidgetItem;item->setData(Qt::UserRole,row.id);item->setData(Qt::UserRole+1,row.word);item->setData(Qt::UserRole+2,row.pair);
             auto *widget=new QWidget;widget->setObjectName("bookRow");widget->setStyleSheet("QWidget#bookRow{background:transparent;}");
             auto *rowLayout=new QHBoxLayout(widget);rowLayout->setContentsMargins(left,top,right,bottom);rowLayout->setSpacing(5);
+            auto *number=new QLabel(QString::number(++rowNumber));number->setObjectName("bookRowNumber");number->setAlignment(Qt::AlignCenter);number->setFixedSize(26,24);number->setAttribute(Qt::WA_TransparentForMouseEvents);number->setStyleSheet("color:#6A568C;background:#EEE8F6;border-radius:4px;");rowLayout->addWidget(number,0,Qt::AlignVCenter);
             auto *text=new QWidget;auto *textLayout=new QVBoxLayout(text);textLayout->setContentsMargins(0,0,0,0);textLayout->setSpacing(0);
             auto *word=new QLabel(row.word);word->setTextFormat(Qt::PlainText);word->setMinimumWidth(0);word->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);word->setAttribute(Qt::WA_TransparentForMouseEvents);QFont wf(family);wf.setPixelSize(qRound(wordSize));wf.setWeight(QFont::DemiBold);word->setFont(wf);word->setFixedHeight(qMax(wordHeight,QFontMetrics(wf).height()));word->setStyleSheet("color:#34255C;background:transparent;");
             auto *summary=new QLabel(row.summary);summary->setTextFormat(Qt::PlainText);summary->setMinimumWidth(0);summary->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);summary->setAttribute(Qt::WA_TransparentForMouseEvents);QFont tf(family);tf.setPixelSize(qRound(translationSize));summary->setFont(tf);summary->setFixedHeight(qMax(translationHeight,QFontMetrics(tf).height()));summary->setStyleSheet("color:#777387;background:transparent;");
@@ -532,30 +675,189 @@ void MainWindow::refreshBook(){
             if(row.hasOnline){auto *icon=new QLabel;icon->setObjectName("onlineSource");icon->setPixmap(vectorIcon("online",QColor("#8E83A7"),16).pixmap(16,16));icon->setFixedSize(18,24);icon->setAlignment(Qt::AlignCenter);icon->setAccessibleName(QStringLiteral("有在线词典释义"));sourceLayout->addWidget(icon,0,Qt::AlignVCenter);}
             sources->setAttribute(Qt::WA_TransparentForMouseEvents);rowLayout->addWidget(sources,0,Qt::AlignVCenter);
             auto *save=new QPushButton;save->setObjectName("rowFavorite");save->setProperty("wordId",row.id);save->setIcon(vectorIcon(row.favorite?"star-filled":"star",QColor("#8A67C1"),18));save->setIconSize(QSize(18,18));save->setFixedSize(26,26);save->setStyleSheet("QPushButton{background:transparent;padding:0;}QPushButton:hover{background:#E8DFF4;}");save->setAccessibleName(row.favorite?QStringLiteral("取消收藏 ")+row.word:QStringLiteral("收藏 ")+row.word);rowLayout->addWidget(save,0,Qt::AlignVCenter);
-            auto *remove=new QPushButton;remove->setObjectName("rowRemove");remove->setProperty("wordId",row.id);remove->setIcon(vectorIcon("close",QColor("#847A94"),14));remove->setIconSize(QSize(14,14));remove->setFixedSize(24,26);remove->setEnabled(!row.favorite);remove->setAccessibleName(QStringLiteral("移除未收藏的单词 ")+row.word);remove->setStyleSheet("QPushButton{background:transparent;padding:0;}QPushButton:hover{background:#F5DEDF;}QPushButton:disabled{background:transparent;}");rowLayout->addWidget(remove,0,Qt::AlignVCenter);
-            connect(save,&QPushButton::clicked,this,[this,row,save]{save->setEnabled(false);setRowFavorite(row);});connect(remove,&QPushButton::clicked,this,[this,row,remove]{remove->setEnabled(false);removeRow(row);});
+            connect(save,&QPushButton::clicked,this,[this,row,save]{save->setEnabled(false);setRowFavorite(row);});
             item->setSizeHint(QSize(0,qMax(26,word->height()+summary->height())+top+bottom));book->addItem(item);book->setItemWidget(item,widget);
         }
-        const int count=qMax(1,(total+49)/50);pageLabel->setText(QString("%1 / %2 · %3").arg(offset/50+1).arg(count).arg(total));previous->setEnabled(offset>0);next->setEnabled(offset+50<total);
-        emptyBook->setText(filter->text().isEmpty()?(favoritesOnly->isChecked()?QStringLiteral("暂无收藏"):QStringLiteral("暂无单词")):QStringLiteral("没有匹配的单词"));emptyBook->setGeometry(book->rect());emptyBook->setVisible(page.rows.isEmpty());emptyBook->raise();
+        const int count=qMax(1,(total+49)/50);{QSignalBlocker blocker(pageJump);pageJump->setRange(1,count);pageJump->setValue(offset/50+1);}pageLabel->setText(QString("/ %1 · %2").arg(count).arg(total));previous->setEnabled(offset>0);next->setEnabled(offset+50<total);
+        emptyBook->setText(filter->text().isEmpty()?(QStringLiteral("暂无收藏")):QStringLiteral("没有匹配的单词"));emptyBook->setGeometry(book->rect());emptyBook->setVisible(page.rows.isEmpty());emptyBook->raise();
     },[this,revision](QString e){if(revision==bookRevision)toast(e,true);});
 }
 void MainWindow::setRowFavorite(BookRow row){
     if(!initialized||pendingClose)return;writeFavorite(row.word,row.pair,!row.favorite);
 }
-void MainWindow::removeRow(BookRow row){
-    if(!initialized||pendingClose)return;
-    if(row.favorite){toast(QStringLiteral("请先取消收藏，再移除该词。"));refreshBook();return;}
-    QString key=identity(row.word,row.pair);removingWords.insert(key);
-    // Cancel before enqueueing the DELETE. A reply arriving later cannot recreate
-    // this word; the database also rejects data older than the deletion tombstone.
-    if(identity(currentEntry.value("Word").toString(),currentEntry.value("Pair").toString())==key||identity(input->text(),detectPair(input->text()))==key){
-        ++requestId;emit cancelOnline();inputDelay->stop();currentEntry={};selectedPart.clear();star->setEnabled(false);copy->setEnabled(false);query->setText(QStringLiteral("查询"));showMessage(QStringLiteral("已移除"),QStringLiteral("重新查询可再次添加该词。"));
-    }
-    auto db=database;++pendingWrites;
-    background(this,[db,row]()mutable{return db.remove(row.id);},[this,key](bool removed){removingWords.remove(key);writeFinished();if(removed){dirty();toast(QStringLiteral("已移除该词及所有来源释义"));}else toast(QStringLiteral("该词已收藏或已不存在，请先取消收藏。"));refreshBook();updateHistory();},[this,key](QString e){removingWords.remove(key);writeFinished();toast(e,true);refreshBook();});
+void MainWindow::leaveReview(int page) {
+    reviewActive = false;
+    ++reviewRevision;
+    review = {};
+    reviewBusy = false;
+    reviewAnswered = false;
+    reviewAdvancePending = false;
+    pages->setCurrentIndex(page);
+    lookupTab->setChecked(page == 0);
+    bookTab->setChecked(page == 1);
+    if (page == 0) input->setFocus();
+    else if (initialized) refreshBook();
 }
-void MainWindow::dirty(){++dirtyGeneration;if(!firstDirtyAt)firstDirtyAt=QDateTime::currentMSecsSinceEpoch();}
+
+void MainWindow::startReview() {
+    if (!initialized || switchingIdentity || pendingClose) {
+        toast(QStringLiteral("词库正在加载，请稍后开始复习。"));
+        return;
+    }
+    ++requestId;
+    emit cancelOnline();
+    inputDelay->stop();
+    query->setText(QStringLiteral("查询"));
+    reviewActive = true;
+    pages->setCurrentIndex(2);
+    lookupTab->setChecked(false);
+    bookTab->setChecked(true);
+    nextReview();
+}
+
+void MainWindow::nextReview() {
+    if (!initialized || switchingIdentity || pendingClose || reviewBusy) return;
+    const auto revision = ++reviewRevision;
+    review = {};
+    reviewSelection = -1;
+    reviewAnswered = false;
+    reviewAdvancePending = false;
+    reviewBusy = true;
+    reviewWord->setTextFormat(Qt::PlainText);
+    reviewWord->setText(QStringLiteral("正在准备题目…"));
+    reviewUnfamiliar->setEnabled(false);
+    reviewMode->setEnabled(false);
+    const bool sentenceMode = reviewMode->currentIndex() == 1;
+    reviewPrompt->setText(sentenceMode ? QString() : QStringLiteral("选择正确的释义"));
+    reviewPrompt->setVisible(!sentenceMode);
+    for (auto *choice : reviewChoices) {
+        choice->hide();
+        choice->setStyleSheet({});
+    }
+    auto db = database;
+    background(this, [db,sentenceMode] { return db.reviewQuestion(sentenceMode); }, [this,revision](ReviewQuestion question) {
+        if (revision != reviewRevision || pendingClose) return;
+        reviewBusy = false;
+        review = question;
+        reviewUnfamiliar->setEnabled(true);
+        reviewMode->setEnabled(true);
+        reviewWord->setTextFormat(question.sentence.isEmpty() ? Qt::PlainText : Qt::RichText);
+        reviewWord->setTextInteractionFlags(Qt::NoTextInteraction);
+        reviewWord->setText(question.sentence.isEmpty() ? question.word : EntryRenderer::reviewSentence(question.sentence, question.sentenceSegments, settings.data));
+        reviewWord->setProperty("sentenceQuestion", !question.sentence.isEmpty());
+        reviewWord->style()->unpolish(reviewWord);
+        reviewWord->style()->polish(reviewWord);
+        reviewWord->updateGeometry();
+        if (!question.sentence.isEmpty()) reviewPrompt->setText(question.sentenceChinese);
+        for (int i = 0; i < reviewChoices.size(); ++i) {
+            auto *choice = reviewChoices.at(i);
+            const auto text = QStringLiteral("%1.  %2").arg(QChar('A' + i)).arg(question.options.at(i));
+            auto *optionLabel = choice->findChild<QLabel *>();
+            optionLabel->setText(text);
+            const bool cloze = !question.sentence.isEmpty();
+            optionLabel->setAlignment(cloze ? Qt::AlignLeft | Qt::AlignTop : Qt::AlignCenter);
+            choice->layout()->setContentsMargins(cloze ? 8 : 14, 10, cloze ? 8 : 14, 10);
+            auto *meaningLabel = choice->findChild<QLabel *>("reviewChoiceMeaning");
+            auto meaningPolicy = meaningLabel->sizePolicy();
+            meaningPolicy.setRetainSizeWhenHidden(cloze);
+            meaningLabel->setSizePolicy(meaningPolicy);
+            meaningLabel->setText(question.sentence.isEmpty() ? QString() :
+                question.meanings.value(i).trimmed().isEmpty() ? QStringLiteral("暂无摘要释义") : question.meanings.at(i));
+            meaningLabel->hide();
+            choice->setAccessibleName(text);
+            choice->setEnabled(true);
+            choice->show();
+        }
+        if (pages->currentIndex() == 2) reviewChoices.first()->setFocus();
+        reviewScroll->verticalScrollBar()->setValue(0);
+    }, [this,revision](QString error) {
+        if (revision != reviewRevision || pendingClose) return;
+        reviewBusy = false;
+        reviewWord->setText(QStringLiteral("暂时无法出题\n点击页面重试"));
+        reviewUnfamiliar->setEnabled(true);
+        reviewMode->setEnabled(true);
+        toast(error, true);
+    });
+}
+
+void MainWindow::advanceReview() {
+    if (pages->currentIndex() != 2 || pendingClose) return;
+    if (reviewBusy) {
+        reviewAdvancePending = reviewAnswered;
+        return;
+    }
+    if (reviewAnswered && !review.token.isEmpty()) {
+        reviewAdvancePending = true;
+        saveReviewAnswer();
+    } else {
+        nextReview();
+    }
+}
+
+void MainWindow::chooseReviewAnswer(int selected) {
+    if (reviewBusy || reviewAnswered || review.token.isEmpty() || pendingClose) return;
+    reviewAnswered = true;
+    reviewSelection = selected;
+    if (!review.sentence.isEmpty()) {
+        reviewPrompt->setText(review.sentenceChinese);
+        reviewPrompt->setVisible(!review.sentenceChinese.trimmed().isEmpty());
+    }
+    for (int i = 0; i < reviewChoices.size(); ++i) {
+        auto *choice = reviewChoices.at(i);
+        choice->setEnabled(false);
+        if (!review.sentence.isEmpty()) {
+            const auto meaning = review.meanings.value(i).trimmed();
+            const auto text = QStringLiteral("%1.  %2\n%3").arg(QChar('A' + i)).arg(review.options.at(i),
+                meaning.isEmpty() ? QStringLiteral("暂无摘要释义") : meaning);
+            choice->findChild<QLabel *>("reviewChoiceMeaning")->show();
+            choice->setAccessibleName(text);
+        }
+        if (i == review.correctIndex) {
+            choice->setStyleSheet(QStringLiteral(
+                "QPushButton[reviewChoice=true]{background:#E7F4EB;border:2px solid #3F8D59;}"
+                "QLabel{color:#245E37;}"));
+        } else if (i == selected) {
+            choice->setStyleSheet(QStringLiteral(
+                "QPushButton[reviewChoice=true]{background:#FCE9ED;border:2px solid #B94D64;}"
+                "QLabel{color:#8F2941;}"));
+        }
+    }
+    saveReviewAnswer();
+}
+
+void MainWindow::saveReviewAnswer() {
+    if (reviewBusy || !reviewAnswered || review.token.isEmpty() || pendingClose) return;
+    const bool correct = reviewSelection == review.correctIndex;
+    reviewBusy = true;
+    reviewMode->setEnabled(false);
+    const auto revision = reviewRevision;
+    const auto question = review;
+    const auto selected = reviewSelection;
+    auto db = database;
+    ++pendingWrites;
+    QTimer::singleShot(0, this, [this,revision,correct] {
+        if (!correct && revision == reviewRevision)
+            reviewScroll->ensureWidgetVisible(reviewChoices.at(review.correctIndex), 0, 8);
+    });
+    background(this, [db,question,selected]() mutable { return db.answerReview(question, selected); },
+        [this,revision,correct](bool saved) {
+            writeFinished();
+            if (revision != reviewRevision || pendingClose) return;
+            reviewBusy = false;
+            reviewMode->setEnabled(true);
+            review.token.clear();
+            if (!saved) toast(QStringLiteral("该词已取消收藏或移除。"));
+            if ((correct && review.sentence.isEmpty()) || reviewAdvancePending) nextReview();
+        }, [this,revision](QString error) {
+            writeFinished();
+            if (revision != reviewRevision || pendingClose) return;
+            reviewBusy = false;
+            reviewMode->setEnabled(true);
+            toast(QStringLiteral("权重保存失败，点击页面重试。\n") + error, true);
+        });
+}
+
+void MainWindow::dirty(){if(!syncing)sync->setText(QStringLiteral("待同步"));++dirtyGeneration;if(!firstDirtyAt)firstDirtyAt=QDateTime::currentMSecsSinceEpoch();}
 void MainWindow::writeFinished(){pendingWrites=qMax(0,pendingWrites-1);if(pendingClose&&pendingWrites==0)QTimer::singleShot(0,this,[this]{close();});}
 void MainWindow::toast(const QString &message,bool error){
     notice->setText(message);notice->setStyleSheet(QString("QLabel#notice{background:%1;color:white;border-radius:7px;padding:10px;font-size:11pt;}").arg(error?"#9E3948":"#30234D"));
@@ -567,16 +869,18 @@ void MainWindow::runSync(bool pullOnly){
     syncing=true;sync->setEnabled(false);sync->setText(QStringLiteral("同步中"));QString directory=settings.directory,dbPath=database.path(),user=activeUsername;QJsonObject config=settings.data;const auto generation=dirtyGeneration;syncCanceled=std::make_shared<std::atomic_bool>(false);auto canceled=syncCanceled;
     struct Synced{QString message;bool pending=false;};
     background(this,[directory,config,dbPath,user,pullOnly,canceled]{auto message=CacheSync::run(directory,config,dbPath,user,pullOnly,canceled);Database db(dbPath,user);return Synced{message,db.revision()>db.syncedRevision()};},[this,generation](Synced result){
-        syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("同步"));
+        syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("已同步"));
         if(result.pending||generation!=dirtyGeneration){if(!firstDirtyAt)dirty();}else firstDirtyAt=0;
-        toast(result.message.isEmpty()?QStringLiteral("同步完成"):result.message);refreshBook();updateHistory();
+        if(result.pending||generation!=dirtyGeneration)sync->setText(QStringLiteral("待同步"));
+        refreshBook();updateHistory();
+        if(pages->currentIndex()==3)dailyPage->activate();
         // Refresh only the chosen source, including a previously empty source
         // that has just arrived through sync. Do not interrupt a query/debounce.
         if(!input->text().trimmed().isEmpty()&&!inputDelay->isActive()&&query->text()==QStringLiteral("查询"))lookup(false,false,false,true);
     },[this](QString error){syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("重试同步"));toast(QStringLiteral("同步失败：")+error+QStringLiteral("\n本地词库已保存，可点击重试。"),true);});
 }
 void MainWindow::exportBook(){
-    if(!initialized)return;QString path=QFileDialog::getSaveFileName(this,QStringLiteral("导出单词本"),QDir::homePath()+"/MyDict.csv",QStringLiteral("CSV 文件 (*.csv)"));if(path.isEmpty())return;auto db=database;QString search=filter->text().trimmed();bool only=favoritesOnly->isChecked();
+    if(!initialized)return;QString path=QFileDialog::getSaveFileName(this,QStringLiteral("导出单词本"),QDir::homePath()+"/MyDict.csv",QStringLiteral("CSV 文件 (*.csv)"));if(path.isEmpty())return;auto db=database;QString search=filter->text().trimmed();bool only=true;
     background(this,[db,path,search,only]{db.exportCsv(path,search,only);return true;},[this](bool){toast(QStringLiteral("已导出单词本"));},[this](QString e){toast(e,true);});
 }
 void MainWindow::importBook(){
@@ -616,6 +920,16 @@ bool MainWindow::eventFilter(QObject *watched,QEvent *event){
             dragging=true;resizeEdges=edges;dragStart=global;dragGeometry=geometry();widget->grabMouse();return true;
         }
     }
+    if (pages->currentIndex() == 2
+        && (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick)
+        && static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton
+        && (widget == pages->widget(2) || pages->widget(2)->isAncestorOf(widget))
+        && widget != reviewExit && !reviewExit->isAncestorOf(widget)
+        && widget != reviewMode && !reviewMode->isAncestorOf(widget)
+        && (reviewAnswered || (!reviewBusy && review.token.isEmpty()))) {
+        advanceReview();
+        return true;
+    }
     if(event->type()==QEvent::MouseMove){
         auto *e=static_cast<QMouseEvent*>(event);QPoint global=globalPoint(e);
         if(dragging){QPoint delta=global-dragStart;QRect target=dragGeometry;if(resizeEdges){if(resizeEdges&Qt::LeftEdge)target.setLeft(qMin(dragGeometry.left()+delta.x(),target.right()-minimumWidth()+1));if(resizeEdges&Qt::RightEdge)target.setRight(qMax(dragGeometry.right()+delta.x(),target.left()+minimumWidth()-1));if(resizeEdges&Qt::TopEdge)target.setTop(qMin(dragGeometry.top()+delta.y(),target.bottom()-minimumHeight()+1));if(resizeEdges&Qt::BottomEdge)target.setBottom(qMax(dragGeometry.bottom()+delta.y(),target.top()+minimumHeight()-1));setGeometry(target);}else if(!isMaximized())move(dragGeometry.topLeft()+delta);return true;}
@@ -624,6 +938,7 @@ bool MainWindow::eventFilter(QObject *watched,QEvent *event){
     return QMainWindow::eventFilter(watched,event);
 }
 void MainWindow::closeEvent(QCloseEvent *event){
+    dailyPage->cancel();
     if(syncCanceled)syncCanceled->store(true);
     ++requestId;emit cancelOnline();inputDelay->stop();filterDelay->stop();
     if(pendingWrites>0){pendingClose=true;input->setEnabled(false);query->setEnabled(false);star->setEnabled(false);toast(QStringLiteral("正在保存本地词库…"));event->ignore();return;}
