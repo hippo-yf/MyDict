@@ -11,6 +11,10 @@
 #include <QTextBlock>
 #include <QTextFragment>
 #include <QHash>
+#include <QFontMetricsF>
+#include <QPainter>
+#include <QAbstractTextDocumentLayout>
+#include <QTextImageFormat>
 #include <QUrl>
 #include <QColor>
 #include <QSet>
@@ -151,12 +155,17 @@ public:
         for (auto value : meanings) { QString part = value.toObject().value("PartOfSpeech").toString(); if (!parts.contains(part)) parts << part; }
         QString out = "<html><body style=\"margin:4px;\">";
         if (!parts.isEmpty()) {
-            out += "<table cellspacing=\"0\" cellpadding=\"7\" bgcolor=\"" + clr("#E2F1E0") + "\"><tr>";
-            for (const auto &part : parts + QStringList{"All"}) {
-                const bool active = part == selectedPart || (part == "All" && selectedPart.isEmpty());
-                out += "<td bgcolor=\"" + QString(active ? "#4E8848" : "#A9D6A5") + "\"><a href=\"pos:" + escape(QString::fromLatin1(QUrl::toPercentEncoding(part == "All" ? QString() : part))) + "\" style=\"font-size:" + QString::number(14 * scale) + "px;color:" + (active ? "#FFFFFF" : "#315E35") + ";text-decoration:none;font-weight:bold\">" + escape(part == "All" ? part : englishPart(part)) + "</a></td><td width=\"3\"></td>";
+            out += "<p style=\"margin:0 0 5px 0;\">";
+            bool first=true;
+            for(const auto &part:parts+QStringList{"All"}) {
+                if(!first)out += "&nbsp; ";
+                first=false;
+                const bool active=part==selectedPart||(part=="All"&&selectedPart.isEmpty());
+                const auto label=part=="All"?part:englishPart(part);
+                const auto href=escape(QString::fromLatin1(QUrl::toPercentEncoding(part=="All"?QString():part)));
+                out += "<a style=\"font-family:'"+font("font.mainwindow.window.1.fontfamily","Microsoft YaHei UI")+"';font-size:"+QString::number(16*scale)+"px;font-weight:900\" href=\"pos:"+href+"\"><img alt=\""+escape(label)+"\" src=\"mydict-pos:"+(active?"active":"inactive")+"\" /></a>";
             }
-            out += "</tr></table>";
+            out += "</p>";
         }
         out += paragraph("<b>" + escape(entry.value("Word").toString()) + "</b> <span style=\"font-size:" + QString::number(17 * scale) + "px;font-family:'" + font("font.doc.body", "sans-serif") + "';color:" + clr("#008577") + ";\">" + escape(shortTranslation(entry)) + "</span>", 34, clr("#0074CB"), true, {}, 3);
         QString phonetic = record.value("Phonetic").toString();
@@ -228,12 +237,25 @@ QString EntryRenderer::render(const QJsonObject &entry, const QJsonObject &setti
 QString EntryRenderer::message(const QString &title, const QString &body, const QJsonObject &settings) { Renderer r(settings); return "<html><body>" + r.paragraph(escape(title), 26, "#0874C4", true, "font-weight:bold", 8) + r.paragraph(escape(body), 14, "#777777") + "</body></html>"; }
 
 EntryBrowser::EntryBrowser(QWidget *parent) : QTextBrowser(parent) {
+    document()->documentLayout()->registerHandler(QTextFormat::UserObject+1,this);
     setOpenLinks(false); setOpenExternalLinks(false); setMouseTracking(true); viewport()->setMouseTracking(true);
     setTextInteractionFlags(Qt::TextBrowserInteraction);
     setFrameShape(QFrame::NoFrame);
 }
 void EntryBrowser::setHtml(const QString &html) {
     QTextBrowser::setHtml(html);
+    struct Badge {int position;QTextCharFormat format;};
+    QList<Badge> badges;
+    for(auto block=document()->begin();block.isValid();block=block.next())for(auto it=block.begin();!it.atEnd();++it){
+        const auto fragment=it.fragment();const auto image=fragment.charFormat().toImageFormat();
+        if(!fragment.isValid()||!image.name().startsWith("mydict-pos:"))continue;
+        auto format=fragment.charFormat();format.setObjectType(QTextFormat::UserObject+1);
+        format.setProperty(QTextFormat::UserProperty+1,image.property(QTextFormat::ImageAltText));
+        format.setProperty(QTextFormat::UserProperty+2,image.name()=="mydict-pos:active");
+        badges.append({fragment.position(),format});
+    }
+    for(const auto &badge:badges){QTextCursor cursor(document());cursor.setPosition(badge.position);cursor.movePosition(QTextCursor::NextCharacter,QTextCursor::KeepAnchor);cursor.setCharFormat(badge.format);}
+
     struct Change {int position,length;QString style;};
     QList<Change> changes;QHash<QString,QString> styles;
     for(auto block=document()->begin();block.isValid();block=block.next())for(auto it=block.begin();!it.atEnd();++it){
@@ -250,6 +272,21 @@ void EntryBrowser::setHtml(const QString &html) {
         QTextCharFormat format;format.setFontStyleName(change.style);cursor.mergeCharFormat(format);
     }
     cursor.endEditBlock();
+}
+QSizeF EntryBrowser::intrinsicSize(QTextDocument *doc,int,const QTextFormat &format) {
+    const QFont font=format.toCharFormat().font().resolve(doc->defaultFont());
+    const QFontMetricsF metrics(font);
+    return QSizeF(qCeil(metrics.horizontalAdvance(format.stringProperty(QTextFormat::UserProperty+1)))+24,qCeil(metrics.height())+12);
+}
+void EntryBrowser::drawObject(QPainter *painter,const QRectF &rect,QTextDocument *doc,int,const QTextFormat &format) {
+    const bool active=format.boolProperty(QTextFormat::UserProperty+2);
+    auto font=format.toCharFormat().font().resolve(doc->defaultFont());
+    font.setUnderline(false);
+    painter->save();painter->setRenderHint(QPainter::Antialiasing);
+    painter->setPen(Qt::NoPen);painter->setBrush(QColor(active?"#4E8848":"#A9D6A5"));painter->drawRoundedRect(rect,6,6);
+    painter->setFont(font);painter->setPen(QColor(active?"#FFFFFF":"#315E35"));
+    painter->drawText(rect,Qt::AlignCenter,format.stringProperty(QTextFormat::UserProperty+1));
+    painter->restore();
 }
 void EntryBrowser::mouseMoveEvent(QMouseEvent *event) {
     QTextBrowser::mouseMoveEvent(event);

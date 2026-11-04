@@ -21,6 +21,8 @@
 #include <QTextLayout>
 #include <QGlyphRun>
 #include <QTextCursor>
+#include <QTextBlock>
+#include <QTextFragment>
 #include <QSignalSpy>
 #include <QImage>
 #include <QUuid>
@@ -100,6 +102,40 @@ private slots:
 #endif
     }
     void cleanup(){AppFonts::apply({},{});}
+    void roundedPartLabelsRemainClickable(){
+        EntryBrowser browser;browser.resize(650,400);browser.setHtml(EntryRenderer::render(entry(),defaultSettings()));browser.show();
+        QTextCursor label(browser.document());bool found=false;
+        for(auto block=browser.document()->begin();block.isValid()&&!found;block=block.next())for(auto it=block.begin();!it.atEnd();++it){
+            const auto fragment=it.fragment();if(fragment.isValid()&&fragment.charFormat().objectType()==QTextFormat::UserObject+1&&fragment.charFormat().anchorHref()=="pos:verb"){
+                QCOMPARE(fragment.charFormat().fontWeight(),int(QFont::Black));
+                label.setPosition(fragment.position());found=true;break;
+            }
+        }
+        QVERIFY(found);QTest::qWait(20);QSignalSpy clicks(&browser,&QTextBrowser::anchorClicked);
+        auto point=browser.cursorRect(label).center()+QPoint(10,0);QCOMPARE(browser.anchorAt(point),QString("pos:verb"));
+        QTest::mouseClick(browser.viewport(),Qt::LeftButton,Qt::NoModifier,point);QCOMPARE(clicks.count(),1);QCOMPARE(clicks.first().first().toUrl().toString(),QString("pos:verb"));
+    }
+    void compactWindowKeepsControlsVisible(){
+        QTemporaryDir dir;QVERIFY(dir.isValid());Settings config(dir.path());offlineSettings(config,"compact-ui",true);
+        Database db(config.databasePath(),config.username());db.initialize();db.store(entry());
+        MainWindow window(dir.path());window.show();
+        auto *input=window.findChild<QLineEdit*>("queryInput");QVERIFY(input);QTRY_VERIFY(input->isEnabled());
+        QCOMPARE(window.minimumWidth(),480);window.resize(480,600);QTRY_COMPARE(window.width(),480);
+        input->setText("run");auto *browser=window.findChild<EntryBrowser*>("entryBrowser");QVERIFY(browser);
+        QTRY_VERIFY(browser->toPlainText().contains("To move quickly"));
+        const QStringList lookupControls{"lookupTab","bookTab","syncButton","about","minimize","maximize","close","backButton","forwardButton","queryInput","deepSeekButton","queryButton","favoriteButton","copyButton","entryBrowser"};
+        for(const auto &name:lookupControls){
+            auto *widget=window.findChild<QWidget*>(name);QVERIFY(widget);QVERIFY(widget->isVisible());
+            QVERIFY2(window.rect().contains(QRect(widget->mapTo(&window,QPoint()),widget->size())),qPrintable(name));
+        }
+        QVERIFY(input->width()>=120);window.grab().save(QCoreApplication::applicationDirPath()+"/../ui-compact-preview.png");
+        QTest::mouseClick(window.findChild<QPushButton*>("bookTab"),Qt::LeftButton);
+        const QStringList bookControls{"bookFilter","favoritesOnly","exportButton","bookMore","wordbook"};
+        for(const auto &name:bookControls){
+            auto *widget=window.findChild<QWidget*>(name);QVERIFY(widget);QVERIFY(widget->isVisible());
+            QVERIFY2(window.rect().contains(QRect(widget->mapTo(&window,QPoint()),widget->size())),qPrintable(name));
+        }
+    }
     void renderRichEntry(){
         auto html=EntryRenderer::render(entry(),defaultSettings());
         QTextDocument document;document.setHtml(html);auto plain=document.toPlainText();

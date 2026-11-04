@@ -44,7 +44,7 @@
   "number.app.dropshadoweffect.71.opacity": "0.035",
   "number.mainwindow.window.1.width": "650.2857142857142",
   "number.mainwindow.window.1.height": "689.1428571428571",
-  "number.mainwindow.window.1.minwidth": "650",
+  "number.mainwindow.window.1.minwidth": "480",
   "number.mainwindow.window.1.minheight": "480",
   "color.cf5f3fa": "#F5F3FA",
   "font.mainwindow.window.1.fontfamily": "Microsoft YaHei UI",

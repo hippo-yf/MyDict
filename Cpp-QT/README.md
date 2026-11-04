@@ -4,6 +4,14 @@
 
 跨平台接入步骤、升级和格式约定见 [共享词库说明](docs/SHARED_WORDBOOK.md)，配置参考 [共享用户示例](configs/shared-user.example.json)。固定旧版 `v1.5.1` 不支持公共 JSON 载荷，参与共享的 C# 与 Qt 客户端都需要升级到本次共享版本。
 
+## Qt 1.5.2 下载
+
+[下载 Qt 1.5.2](https://github.com/hippo-yf/MyDict/releases/tag/qt-v1.5.2)。提供 Windows x64 便携 ZIP、Linux x64 压缩包，以及 macOS arm64 / x64 的 `.app` 压缩包，随包提供 SHA256 校验值和运行库，无需安装 Conda。
+
+Windows 解压后运行 `bin/MyDictQt.exe`，Linux 解压后运行顶层 `MyDictQt` 启动脚本。macOS 按处理器选择对应压缩包，解压后运行 `.app`。macOS 使用临时签名，尚未经过 Apple 公证，首次启动可能需要在系统安全设置中允许打开。
+
+本版增加低内存字体加载、查询与显示来源切换，调整圆角粗体词性按钮，并将窗口默认最小宽度降至 480 像素。
+
 ## 界面预览
 
 以下为 Qt 版合成测试词条的真实窗口截图，不含个人词库。

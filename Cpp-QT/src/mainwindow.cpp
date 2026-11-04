@@ -223,7 +223,7 @@ void MainWindow::createUi() {
         updateDeepSeek();selectedPart.clear();lookup(false,false,false,true);
     });
     connect(star, &QPushButton::clicked, this, &MainWindow::favoriteCurrent);
-    connect(copy, &QPushButton::clicked, this, [this] { QApplication::clipboard()->setText(browser->toPlainText()); toast(QStringLiteral("已复制释义")); });
+    connect(copy, &QPushButton::clicked, this, [this] { QApplication::clipboard()->setText(browser->toPlainText().remove(QChar::ObjectReplacementCharacter).trimmed()); toast(QStringLiteral("已复制释义")); });
     connect(back, &QPushButton::clicked, this, [this] { navigate(-1); }); connect(forward, &QPushButton::clicked, this, [this] { navigate(1); });
     connect(lookupTab, &QPushButton::clicked, this, [this] { pages->setCurrentIndex(0); lookupTab->setChecked(true); bookTab->setChecked(false); input->setFocus(); });
     connect(bookTab, &QPushButton::clicked, this, [this] { pages->setCurrentIndex(1); lookupTab->setChecked(false); bookTab->setChecked(true); refreshBook(); });
@@ -345,7 +345,7 @@ void MainWindow::applySettings(bool restoreWindow) {
         QPoint desired(saved.value("Left").toInt(100),saved.value("Top").toInt(100));
         for(auto *s:QGuiApplication::screens())if(s->availableGeometry().contains(desired)){screen=s;break;}
         QRect area=screen?screen->availableGeometry():QRect(0,0,1920,1080);
-        int minWidth=qMin(area.width(),qRound(styleNumber(settings.data,"number.mainwindow.window.1.minwidth",650)));
+        int minWidth=qMin(area.width(),qRound(styleNumber(settings.data,"number.mainwindow.window.1.minwidth",480)));
         int minHeight=qMin(area.height(),qRound(styleNumber(settings.data,"number.mainwindow.window.1.minheight",480)));
         setMinimumSize(qMax(420,minWidth),qMax(320,minHeight));
         width=qBound(minimumWidth(),width,qMax(minimumWidth(),area.width()));height=qBound(minimumHeight(),height,qMax(minimumHeight(),area.height()));
