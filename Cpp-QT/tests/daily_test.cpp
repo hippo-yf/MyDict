@@ -65,7 +65,7 @@ private slots:
         MainWindow window(temp.path());window.show();QTRY_VERIFY(window.findChild<QLineEdit*>("queryInput")->isEnabled());window.resize(480,680);
         auto *tab=window.findChild<QPushButton*>("dailyTab");QVERIFY(tab);QTest::mouseClick(tab,Qt::LeftButton);
         auto *pages=window.findChild<QStackedWidget*>("pages");QCOMPARE(pages->currentIndex(),3);auto *daily=window.findChild<DailyPage*>();auto *browser=daily->findChild<EntryBrowser*>("dailyBrowser");QTRY_VERIFY(browser->toPlainText().contains("resilience"));
-        browser->verticalScrollBar()->setValue(100);int scroll=browser->verticalScrollBar()->value();QSignalSpy requests(&window,&MainWindow::onlineLookup);
+        QTRY_VERIFY(!daily->findChild<QLabel*>("dailyStatus")->isVisible());QTest::qWait(100);QTRY_VERIFY(daily->findChild<QPushButton*>("dailyRetry")->isEnabled());browser->verticalScrollBar()->setValue(100);int scroll=browser->verticalScrollBar()->value();QSignalSpy requests(&window,&MainWindow::onlineLookup);
         emit daily->lookupRequested("resilience");QCOMPARE(pages->currentIndex(),0);QTRY_VERIFY(window.findChild<EntryBrowser*>("entryBrowser")->toPlainText().contains("The ability to recover"));QCOMPARE(requests.count(),0);
         QTest::mouseClick(tab,Qt::LeftButton);QTRY_VERIFY(daily->findChild<QPushButton*>("dailyRetry")->isEnabled());QCOMPARE(browser->verticalScrollBar()->value(),scroll);
         window.grab().save(QCoreApplication::applicationDirPath()+"/../daily-main-window.png");

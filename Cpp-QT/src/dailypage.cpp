@@ -31,7 +31,7 @@ void DailyPage::cancel(){if(canceled)canceled->store(true);++revision;busy=false
 void DailyPage::configure(Database db,QJsonObject config){
     const bool identity=!database||database->path()!=db.path();
     if(identity){cancel();database=std::make_shared<Database>(db);article={};cacheLoaded=false;autoDate.clear();historyOffset=0;history->clear();status->clear();status->hide();browser->clear();setBusy(false);}
-    settings=config;if(!article.isEmpty())render();
+    const bool stylesChanged=settings!=config;settings=config;if(stylesChanged&&!article.isEmpty())render();
 }
 void DailyPage::setBusy(bool value){busy=value;retry->setEnabled(!value);todayButton->setEnabled(!value);history->setEnabled(!value);older->setEnabled(!value&&history->count()==20);newer->setEnabled(!value&&historyOffset>0);}
 void DailyPage::run(std::function<QJsonObject()> job,std::function<void(QJsonObject)> done){
@@ -42,7 +42,7 @@ void DailyPage::run(std::function<QJsonObject()> job,std::function<void(QJsonObj
 }
 void DailyPage::activate(){
     if(!database||busy)return;
-    try{const auto day=DailyWord::today(settings);const bool generate=autoDate!=day;autoDate=day;load(!generate&&!article.isEmpty()?article.value("Date").toString():QString(),generate);}catch(const std::exception &e){status->setText(QString::fromUtf8(e.what()));status->show();}
+    try{const auto day=DailyWord::today(settings);const bool generate=autoDate!=day;if(!generate&&!article.isEmpty())return;autoDate=day;load(!generate&&!article.isEmpty()?article.value("Date").toString():QString(),generate);}catch(const std::exception &e){status->setText(QString::fromUtf8(e.what()));status->show();}
 }
 void DailyPage::load(QString date,bool generate){
     if(!database||busy)return;auto db=*database;auto config=settings;canceled=std::make_shared<std::atomic_bool>(false);auto token=canceled;
