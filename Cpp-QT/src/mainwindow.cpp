@@ -41,7 +41,12 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QLockFile>
-#include <QSizeGrip>
+#include <QShowEvent>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <windowsx.h>
+#include <dwmapi.h>
+#endif
 #include <QSignalBlocker>
 #include <QAbstractButton>
 #include <QTextLayout>
@@ -164,14 +169,15 @@ MainWindow::MainWindow(QString dataDirectory, QWidget *parent)
         if (id != requestId) return; query->setText(QStringLiteral("查询")); toast(message, true);
         if (currentEntry.isEmpty()) showMessage(QStringLiteral("暂未查到结果"), message);
     });
-    networkThread.start();
+
     configWatcher = new QFileSystemWatcher(this); configWatcher->addPath(settings.directory);
     if (QFile::exists(settings.path)) configWatcher->addPath(settings.path);
     connect(configWatcher, &QFileSystemWatcher::fileChanged, this, [this] { reloadDelay->start(180); });
     connect(configWatcher, &QFileSystemWatcher::directoryChanged, this, [this] { reloadDelay->start(180); });
     connect(reloadDelay, &QTimer::timeout, this, &MainWindow::reloadConfig);
     qApp->installEventFilter(this);
-    QTimer::singleShot(0, this, &MainWindow::initialize);
+    for(auto *child:findChildren<QWidget*>())child->setMouseTracking(true);
+    setMouseTracking(true);
 }
 MainWindow::~MainWindow() {
     qApp->removeEventFilter(this);
@@ -180,9 +186,50 @@ MainWindow::~MainWindow() {
     emit cancelOnline(); networkThread.quit(); networkThread.wait();
 }
 
+void MainWindow::showEvent(QShowEvent *event) {
+    QMainWindow::showEvent(event);
+#ifdef Q_OS_WIN
+    // Windows 11 draws a light DWM outline even for a frameless window.
+    const DWORD noBorder = 0xFFFFFFFE;
+    DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()), 34, &noBorder, sizeof(noBorder));
+#endif
+    if(startupScheduled)return;
+    startupScheduled=true;
+    // Let the window paint before font registration, cached HTML and database work.
+    QTimer::singleShot(80,this,[this]{
+        if(pendingClose)return;
+        startupReady=true;
+        applySettings(false);
+        networkThread.start();
+        initialize();
+    });
+}
+
+#ifdef Q_OS_WIN
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+bool MainWindow::nativeEvent(const QByteArray &type, void *message, qintptr *result) {
+#else
+bool MainWindow::nativeEvent(const QByteArray &type, void *message, long *result) {
+#endif
+    auto *msg=static_cast<MSG*>(message);
+    if(msg->message==WM_NCHITTEST&&!isMaximized()&&!isFullScreen()){
+        RECT bounds;GetWindowRect(msg->hwnd,&bounds);
+        const int x=GET_X_LPARAM(msg->lParam),y=GET_Y_LPARAM(msg->lParam);
+        const int edge=qRound(7*devicePixelRatioF());
+        const bool left=x>=bounds.left&&x<bounds.left+edge,right=x<bounds.right&&x>=bounds.right-edge;
+        const bool top=y>=bounds.top&&y<bounds.top+edge,bottom=y<bounds.bottom&&y>=bounds.bottom-edge;
+        if(left||right||top||bottom){
+            *result=top?(left?HTTOPLEFT:right?HTTOPRIGHT:HTTOP):bottom?(left?HTBOTTOMLEFT:right?HTBOTTOMRIGHT:HTBOTTOM):left?HTLEFT:HTRIGHT;
+            return true;
+        }
+    }
+    return QMainWindow::nativeEvent(type,message,result);
+}
+#endif
+
 void MainWindow::createUi() {
     auto *root = new QWidget(this); root->setObjectName("root"); setCentralWidget(root);
-    auto *layout = new QVBoxLayout(root); layout->setContentsMargins(1,1,1,1); layout->setSpacing(0);
+    auto *layout = new QVBoxLayout(root); layout->setContentsMargins(0,0,0,0); layout->setSpacing(0);
     titleBar = new QWidget(root); titleBar->setObjectName("titleBar"); titleBar->setFixedHeight(42);
     auto *title = new QHBoxLayout(titleBar); title->setContentsMargins(7,0,4,0); title->setSpacing(2);
     lookupTab = new QPushButton(QStringLiteral("查词")); lookupTab->setObjectName("lookupTab"); lookupTab->setCheckable(true); lookupTab->setChecked(true);
@@ -328,7 +375,7 @@ void MainWindow::createUi() {
     connect(dailyPage,&DailyPage::workFinished,this,&MainWindow::writeFinished);
     connect(dailyPage,&DailyPage::changed,this,[this]{dirty();refreshFavoriteState();});
     notice = new QLabel(root); notice->setObjectName("notice"); notice->setWordWrap(true); notice->setAlignment(Qt::AlignCenter); notice->setAttribute(Qt::WA_TransparentForMouseEvents); notice->hide();
-    auto *grip = new QSizeGrip(root); grip->setFixedSize(12,12); auto *bottom = new QHBoxLayout; bottom->setContentsMargins(0,0,1,0); bottom->addStretch(); bottom->addWidget(grip); layout->addLayout(bottom);
+
     inputDelay = new QTimer(this); inputDelay->setSingleShot(true);
     filterDelay = new QTimer(this); filterDelay->setSingleShot(true); filterDelay->setInterval(200);
     noticeTimer = new QTimer(this); noticeTimer->setSingleShot(true); noticeTimer->setInterval(3000);
@@ -379,11 +426,12 @@ void MainWindow::initialize() {
         if(initial.dirty)dirty();
         if(!initial.selection.word.isEmpty()&&input->text().isEmpty()){showSelection(initial.selection);if(ai!=useDeepSeek())lookup(false,false,false,true);}
         if(pages->currentIndex()==1)refreshBook();
-        if(settings.data.value("CacheSync").toObject().value("Enabled").toBool(false))runSync(true);
+        if(settings.data.value("CacheSync").toObject().value("Enabled").toBool(false))QTimer::singleShot(800,this,[this]{if(!pendingClose)runSync(true);});
     },[this](QString e) {toast(e,true);showMessage(QStringLiteral("无法打开词库"),e);});
 }
 
 void MainWindow::updateFonts(bool includePhonetic) {
+    if(!startupReady)return;
     // Only keys consumed by this UI/HTML renderer belong here. WPF-only keys,
     // compatibility FontName fields and unrelated font files are not loaded.
     const auto ui=styleValue(settings.data,"font.mainwindow.window.1.fontfamily","Microsoft YaHei UI");
@@ -550,7 +598,7 @@ void MainWindow::changeIdentity(){
                 showSelection(initial.selection);if(ai!=useDeepSeek())lookup(false,false,false,true);
                 if(pages->currentIndex()==3)dailyPage->activate();
                 if(initial.dirty)dirty();updateHistory();if(pages->currentIndex()==1)refreshBook();toast(QStringLiteral("已切换用户词库：")+targetUser);
-                if(settings.data.value("CacheSync").toObject().value("Enabled").toBool())runSync(true);
+                if(settings.data.value("CacheSync").toObject().value("Enabled").toBool())QTimer::singleShot(800,this,[this]{if(!pendingClose)runSync(true);});
             },[this](QString error){writeFinished();if(pendingClose)return;switchingIdentity=false;pages->setEnabled(true);toast(error,true);initialize();});
     }catch(const std::exception &e){switchingIdentity=false;pages->setEnabled(true);toast(QString::fromUtf8(e.what()),true);initialize();}
 }

@@ -32,6 +32,14 @@ signals:
     void onlineLookup(quint64 requestId, QString text, QJsonObject settings, bool deepSeek);
     void cancelOnline();
 protected:
+    void showEvent(QShowEvent *event) override;
+#ifdef Q_OS_WIN
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    bool nativeEvent(const QByteArray &type, void *message, qintptr *result) override;
+#else
+    bool nativeEvent(const QByteArray &type, void *message, long *result) override;
+#endif
+#endif
     bool eventFilter(QObject *watched, QEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
 private:
@@ -51,6 +59,7 @@ private:
     int reviewSelection = -1;
     quint64 requestId = 0, bookRevision = 0, dirtyGeneration = 0, favoriteRevision = 0;
     int pendingWrites = 0, offset = 0, total = 0;
+    bool startupScheduled = false, startupReady = false;
     bool initialized = false, syncing = false, pendingClose = false, favorite = false, savingSettings = false, switchingIdentity = false;
     QSet<QString> removingWords;
     QSet<QString> favoriteWrites;

@@ -213,8 +213,9 @@ public:
                         if (examples.isEmpty() && !sense.value("Example").toString().isEmpty()) examples.append(QJsonObject{{"Text", sense.value("Example")}});
                         for (auto value : examples) {
                             auto example = value.toObject();
-                            out += paragraph("<span style=\"color:#BADCF5\">│ </span>" + sentence(example.value("Text").toString(), example.value("Segments").toArray(), "#707070"), 18, "#707070", true, "font-style:italic;margin-left:22px;", 2);
-                            if (!example.value("Chinese").toString().isEmpty()) out += paragraph("<span style=\"color:#BADCF5\">│ </span>" + escape(example.value("Chinese").toString()), 14, clr("#008577"), false, "margin-left:22px;", 1);
+                            const auto marker = "<span style=\"color:#BADCF5;font-family:\'" + font("font.doc.body", "sans-serif") + "\';font-size:" + QString::number(14 * scale) + "px;font-style:normal;font-weight:400\">│ </span>";
+                            out += paragraph(marker + sentence(example.value("Text").toString(), example.value("Segments").toArray(), "#707070"), 18, "#707070", true, "font-style:italic;margin-left:22px;", 2);
+                            if (!example.value("Chinese").toString().isEmpty()) out += paragraph(marker + escape(example.value("Chinese").toString()), 14, clr("#008577"), false, "margin-left:22px;", 1);
                         }
                     }
                 }

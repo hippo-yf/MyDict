@@ -129,4 +129,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --title "拾词 MyDict Qt ${GITHUB_REF_NAME#qt-v}" --notes-file Cpp-QT/docs/RELEASE-1.6.md
+          gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --title "拾词 MyDict Qt ${GITHUB_REF_NAME#qt-v}" --notes-file "Cpp-QT/docs/RELEASE-${GITHUB_REF_NAME#qt-v}.md"

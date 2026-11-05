@@ -24,6 +24,7 @@
 #include <QWindow>
 #include <QtMath>
 #include <exception>
+#include <windows.h>
 
 using namespace MyDict;
 
@@ -155,6 +156,29 @@ class NativeFontsTest : public QObject {
         painter.end();return image.save(QDir(output).filePath("glyph-sheet.png"));
     }
 private slots:
+    void windowEdgesAndDeferredStartup() {try {
+        QTemporaryDir temp;Settings config(temp.path());config.load();config.data.insert("username","window-edge-fixture");
+        auto sync=config.data.value("CacheSync").toObject();sync.insert("Enabled",false);config.data.insert("CacheSync",sync);config.save();
+        MainWindow window(temp.path());
+        auto *input=window.findChild<QLineEdit*>("queryInput");QVERIFY(input);
+        QVERIFY(!input->isEnabled());
+        window.show();QVERIFY(window.isVisible());
+        QVERIFY(!input->isEnabled());
+        QTRY_VERIFY(input->isEnabled());
+        const auto hwnd=reinterpret_cast<HWND>(window.winId());
+        RECT r;QVERIFY(GetWindowRect(hwnd,&r));
+        const int midX=(r.left+r.right)/2,midY=(r.top+r.bottom)/2;
+        auto hit=[hwnd](int x,int y){return SendMessage(hwnd,WM_NCHITTEST,0,MAKELPARAM(x,y));};
+        QCOMPARE(hit(r.left+1,midY),LRESULT(HTLEFT));
+        QCOMPARE(hit(r.right-2,midY),LRESULT(HTRIGHT));
+        QCOMPARE(hit(midX,r.top+1),LRESULT(HTTOP));
+        QCOMPARE(hit(midX,r.bottom-2),LRESULT(HTBOTTOM));
+        QCOMPARE(hit(r.left+1,r.top+1),LRESULT(HTTOPLEFT));
+        QCOMPARE(hit(r.right-2,r.top+1),LRESULT(HTTOPRIGHT));
+        QCOMPARE(hit(r.left+1,r.bottom-2),LRESULT(HTBOTTOMLEFT));
+        QCOMPARE(hit(r.right-2,r.bottom-2),LRESULT(HTBOTTOMRIGHT));
+        window.close();
+    }catch(const std::exception &e){QFAIL(e.what());}}
     void initTestCase() {
         Q_INIT_RESOURCE(resources);
         QVERIFY2(QGuiApplication::platformName()=="windows","Run this QA with the real windows platform plugin, not offscreen/minimal.");
