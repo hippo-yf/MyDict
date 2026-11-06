@@ -92,6 +92,8 @@
     "_TimeZone": "每天日期边界使用的 IANA 时区。",
     "Difficulty": "中等",
     "_Difficulty": "选词难度偏好，例如中等、进阶。",
+    "SummaryMaxTokens": 16384,
+    "_SummaryMaxTokens": "新闻摘要逐句翻译与语法解析的独立输出预算，8192–32768，默认16384；需在模型支持范围内设置。",
     "MaxRequestsPerDay": 2,
     "_MaxRequestsPerDay": "每个本地用户每天最多调用模型的次数，1–10；失败请求也计数。",
     "RepeatDays": 90,
@@ -115,7 +117,7 @@
         "Url": "https://www.theguardian.com/society/rss"
       }
     ],
-    "_Feeds": "RSS 2.0 HTTPS 来源，按日期轮换，失败后依次尝试其他源。Topic 为主题，Name 为来源名称，Url 为订阅地址。",
+    "_Feeds": "备用 RSS 2.0 HTTPS 来源；优先轮换新华社英文网、China Daily、CGTN，失败或无合适词汇后依次尝试这里的源。先在本地选词，再由 DeepSeek 解析。Topic 为主题，Name 为来源名称，Url 为订阅地址。",
     "ShowImage": true,
     "_ShowImage": "是否后台获取原新闻配图；缩略图缓存于 SQLite。"
   }

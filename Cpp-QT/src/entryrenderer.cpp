@@ -246,7 +246,8 @@ QString EntryRenderer::daily(const QJsonObject &article,const QJsonObject &setti
     if(link.scheme()=="https")attribution+="　<a href=\""+escape(link.toString())+"\">阅读原文</a>";
     const auto attributionHtml=r.paragraph(attribution,12,"#82758D");
     auto fragment=[](QString html){int start=html.indexOf('>',html.indexOf("<body"))+1;return html.mid(start,html.lastIndexOf("</body>")-start);};
-    auto heading=fragment(r.render(entry,{},1));heading.remove(QRegularExpression("<hr[^>]*>"));
+    auto heading=fragment(r.render(entry,{},1));heading.remove(QRegularExpression("<hr[^>]*>"));    QStringList headParts;for(auto meaning:record.value("Meanings").toArray()){const auto part=meaning.toObject().value("PartOfSpeech").toString();if(!part.isEmpty()&&!headParts.contains(part))headParts<<part;}
+    if(!headParts.isEmpty())heading+=r.paragraph("<b>"+escape(headParts.join(" · "))+"</b>",14,"#B27D48",true,"font-style:italic");
     const auto imageData=article.value("ImageData").toString();
     if(!imageData.isEmpty()){
         const int imageWidth=qMax(1,article.value("ImageWidth").toInt(432)),imageHeight=qMax(1,article.value("ImageHeight").toInt(288));
@@ -266,8 +267,10 @@ QString EntryRenderer::daily(const QJsonObject &article,const QJsonObject &setti
     if(!sentences.isEmpty()){
         int sentenceNumber=0;
         for(auto value:sentences){auto sentence=value.toObject();
-            out+=r.paragraph("<span style=\"color:#9B87B3;font-style:normal\">"+QString::number(++sentenceNumber)+" │ </span>"+r.sentence(sentence.value("Text").toString(),sentence.value("Segments").toArray(),"#707070"),16,"#707070",true,"font-style:italic;margin-left:14px",4);
-            out+=r.paragraph("<span style=\"color:#D2C8DF\">　│ </span>"+escape(sentence.value("Chinese").toString()),14,r.clr("#008577"),false,"margin-left:14px",2);
+            const auto marker=QString("<span style=\"font-family:sans-serif;font-size:%1px;font-style:normal;font-weight:400;color:#B5A5C9\">│ </span>").arg(14*styleNumber(settings,"number.doc.scale",.9));
+            out+="<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\"><tr><td width=\"20\" valign=\"top\">"+r.paragraph(QString::number(++sentenceNumber),14,"#9B87B3",false,{},4)+"</td><td>";
+            out+=r.paragraph(marker+r.sentence(sentence.value("Text").toString(),sentence.value("Segments").toArray(),"#707070"),16,"#707070",true,"font-style:italic",4);
+            out+=r.paragraph(marker+escape(sentence.value("Chinese").toString()),14,r.clr("#008577"),false,{},2)+"</td></tr></table>";
         }
     }else{
         auto original=source.value("Summary").toString();original.remove(QRegularExpression("Continue reading.*$",QRegularExpression::CaseInsensitiveOption));

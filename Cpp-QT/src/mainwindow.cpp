@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "dailypage.h"
+#include "birdpet.h"
 #include "entryrenderer.h"
 #include "appfonts.h"
 #include "services.h"
@@ -200,6 +201,7 @@ void MainWindow::showEvent(QShowEvent *event) {
         if(pendingClose)return;
         startupReady=true;
         applySettings(false);
+        QTimer::singleShot(250,this,[this]{if(!pendingClose)new BirdPet(this);});
         networkThread.start();
         initialize();
     });

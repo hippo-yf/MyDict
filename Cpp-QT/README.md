@@ -4,9 +4,9 @@
 
 跨平台接入步骤、升级和格式约定见 [共享词库说明](docs/SHARED_WORDBOOK.md)，配置参考 [共享用户示例](configs/shared-user.example.json)。固定旧版 `v1.5.1` 不支持公共 JSON 载荷，参与共享的 C# 与 Qt 客户端都需要升级到本次共享版本。
 
-## Qt 1.6.1 下载
+## Qt 1.7.0 下载
 
-[下载 Qt 1.6.1](https://github.com/hippo-yf/MyDict/releases/tag/qt-v1.6.1)。提供 Windows x64 便携 ZIP、Linux x64 压缩包，以及 macOS arm64 / x64 的 `.app` 压缩包，随包提供 SHA256 校验值和运行库，无需安装 Conda。
+[下载 Qt 1.7.0](https://github.com/hippo-yf/MyDict/releases/tag/qt-v1.7.0)。提供 Windows x64 便携 ZIP、Linux x64 压缩包，以及 macOS arm64 / x64 的 `.app` 压缩包，随包提供 SHA256 校验值和运行库，无需安装 Conda。
 
 Windows 解压后运行 `bin/MyDictQt.exe`，Linux 解压后运行顶层 `MyDictQt` 启动脚本。macOS 按处理器选择对应压缩包，解压后运行 `.app`。macOS 使用临时签名，尚未经过 Apple 公证，首次启动可能需要在系统安全设置中允许打开。
 
@@ -199,7 +199,7 @@ C# 与 Qt 每个客户端写自己的分片，并按来源查询时间、收藏�
 
 ### 今日词汇
 
-顶部“今日词汇”每天从近期新闻 RSS 的真实标题与摘要选一个英文词，由 DeepSeek 生成语境介绍、精准中文释义、搭配、原创双语例句和用法区别。来源链接及报道日期单独标出，不能获取可靠报道时不会编造当日内容。首次打开才在后台生成，启动窗口不等待网络。没有密钥时显示设置提示，已有专题仍可离线浏览。
+顶部“今日词汇”优先轮换新华社英文网、China Daily Global 和 CGTN，保留原有 RSS 来源作为备用。先在本地从近期真实报道中筛选通用学习词汇，排除近期已学的词并固定新闻与单词，再由 DeepSeek 生成语境介绍、精准中文释义、搭配、原创双语例句和用法区别。来源链接及报道日期单独标出，不能获取可靠报道时不会编造当日内容。首次打开才在后台生成，启动窗口不等待网络。没有密钥时显示设置提示，已有专题仍可离线浏览。
 
 `settings.json` 可选 `DailyWord` 组的完整字段与中文说明见 `settings.qt.example.json`。未配置该组时使用内置默认值，不需改动已有设置。默认每天最多两次模型请求，失败请求也计入；成功后当日不重复生成。新闻抓取失败不消耗模型次数。日期按 Asia/Shanghai 划分。首次使用须已配置 DeepSeek.ApiKey 和 Endpoint，今日词汇与查词来源开关相互独立。
 
@@ -207,4 +207,4 @@ C# 与 Qt 每个客户端写自己的分片，并按来源查询时间、收藏�
 
 开发调试可运行 `MyDictTool --data-dir <独立测试目录> --daily-word`，会实际调用配置的 API。部署到既有 Windows Release 目录时仅覆盖变更的程序及必要依赖，不清空目录，不覆盖用户 settings.json、SQLite 或用户自行添加的文件。
 
-摘要保留 RSS 提供的完整文本，逐句显示语法配色及中文翻译。首次查看尚未补全的专题时，后台调用 DeepSeek 补全并写回 SQLite；摘要补全也计入 DailyWord.MaxRequestsPerDay（默认两次），后续读取不重复调用。旧的 1200 字符截断摘要会先尝试从原 RSS 恢复；不能恢复时明确提示，不把残缺文本当作完整摘要。
+RSS 摘要保留订阅源提供的完整文本；新华社和 China Daily 提取新闻正文中的完整段落（最多 6000 字符，在段落边界停止），不混入导航和相关文章。CGTN 仅重复标题、没有完整摘要的条目会跳过。摘要，逐句显示语法配色及中文翻译。首次查看尚未补全的专题时，后台调用 DeepSeek 补全并写回 SQLite；摘要补全也计入 DailyWord.MaxRequestsPerDay（默认两次），后续读取不重复调用。旧的 1200 字符截断摘要会先尝试从原 RSS 恢复；不能恢复时明确提示，不把残缺文本当作完整摘要。

@@ -24,6 +24,28 @@ class DailyTest:public QObject{
     }
 private slots:
     void initTestCase(){Q_INIT_RESOURCE(resources);}
+    void preferredNewsAndLocalSelection(){
+        const auto feeds=DailyWord::newsSources(offlineSettings());QVERIFY(feeds.size()>=6);
+        QCOMPARE(feeds[0].toObject().value("Name").toString(),QString("Xinhua"));
+        QCOMPARE(feeds[1].toObject().value("Name").toString(),QString("China Daily"));
+        QCOMPARE(feeds[2].toObject().value("Name").toString(),QString("CGTN"));
+        const auto now=QDateTime::currentDateTimeUtc();const auto path=now.date().toString("yyyyMMdd");
+        auto links=DailyWord::parseNewsLinks("<a href='/"+path+"/abc/c.html'>Scientists study resilience in forests</a><a href='https://evil.test/"+path+"/a'>Scientists study resilience</a><a href='/20190101/a'>Scientists study resilience</a>",feeds[0].toObject(),now);
+        QCOMPARE(links.size(),1);
+        auto parsed=DailyWord::parseNewsArticle("<meta property='og:title' content='Scientists study resilience'><span id='detailContent'><p>Researchers examine resilience after drought.</p><p>Forests recover through ecological restoration.</p></span><p>Unrelated navigation outside the article.</p>",links[0].toObject());
+        QVERIFY(!parsed.isEmpty());QVERIFY(!parsed.value("Summary").toString().contains("Unrelated"));QVERIFY(parsed.value("Summary").toString().endsWith("restoration."));
+        auto selected=DailyWord::selectWord(QJsonArray{parsed},{});QCOMPARE(selected.value("word").toString(),QString("resilience"));
+        QVERIFY(DailyWord::selectWord(QJsonArray{parsed},{"resilience","drought","ecological","restoration"}).isEmpty());
+        QVERIFY(DailyWord::parseNewsArticle("<p>Only navigation without article container.</p>",{}).isEmpty());
+        auto china=DailyWord::parseNewsLinks("<a href='/a/"+now.date().toString("yyyyMM/dd")+"/WSabc.html'>Marine biodiversity conservation advances</a>",feeds[1].toObject(),now);QCOMPARE(china.size(),1);
+    }
+    void downloadedNewsFixtures(){
+        const auto dir=qEnvironmentVariable("MYDICT_NEWS_FIXTURES");if(dir.isEmpty())QSKIP("Optional real-page parser check");
+        const auto feeds=DailyWord::newsSources(offlineSettings());
+        QFile rss(dir+"/news-cgtn.xml");QVERIFY(rss.open(QIODevice::ReadOnly));const auto cgtn=DailyWord::parseFeed(rss.readAll(),feeds[2].toObject(),QDateTime::currentDateTimeUtc());QVERIFY(!cgtn.isEmpty());QVERIFY(!DailyWord::selectWord(cgtn,{}).isEmpty());
+        for(int i=0;i<2;++i){QFile home(dir+"/news-probe-"+QString::number(i)+".html");QVERIFY(home.open(QIODevice::ReadOnly));auto links=DailyWord::parseNewsLinks(QString::fromUtf8(home.readAll()),feeds[i].toObject(),QDateTime::currentDateTimeUtc());QVERIFY(!links.isEmpty());QVERIFY(!DailyWord::selectWord(links,{}).isEmpty());
+            QFile detail(dir+"/news-probe-"+QString::number(i+3)+".html");QVERIFY(detail.open(QIODevice::ReadOnly));auto parsed=DailyWord::parseNewsArticle(QString::fromUtf8(detail.readAll()),links[0].toObject());QVERIFY(!parsed.isEmpty());}
+    }
     void feedAndValidation(){
         auto now=QDateTime::currentDateTimeUtc();auto date=now.toString(Qt::RFC2822Date);date.replace("+0000","GMT");
         QByteArray xml=("<rss><channel><item><title>Scientists study resilience</title><description>Forests recover.</description><link>https://example.org/news</link><pubDate>"+date+"</pubDate></item><item><title>Old</title><link>https://example.org/old</link><pubDate>Tue, 01 Jan 2019 12:00:00 GMT</pubDate></item></channel></rss>").toUtf8();
@@ -49,7 +71,7 @@ private slots:
         auto feed=DailyWord::parseFeed(xml,{},now);QCOMPARE(feed.size(),1);QCOMPARE(feed[0].toObject().value("SummaryBody").toString(),QString("Birds fly. They migrate."));QCOMPARE(feed[0].toObject().value("SummaryLead").toString(),QString("A short news teaser"));
         QTemporaryDir temp;Database db(temp.filePath("a.sqlite"),"daily");db.initialize();auto article=DailyWord::validate(response(),sources(),{},offlineSettings());article.insert("SummaryVersion",1);article.insert("SummarySentences",QJsonArray{QJsonObject{{"Text","A short news teaser"},{"Chinese","简短导语"}},QJsonObject{{"Text","Birds fly."},{"Chinese","鸟会飞。"}}});db.saveDailyArticle(article);
         auto upgraded=DailyWord::enrichSummary(db,article,offlineSettings(),std::make_shared<std::atomic_bool>(false));QCOMPARE(upgraded.value("SummaryVersion").toInt(),2);QCOMPARE(upgraded.value("SummarySentences").toArray().size(),1);QCOMPARE(upgraded.value("Source").toObject().value("SummaryLead").toString(),QString("A short news teaser"));
-        QTextDocument rendered;rendered.setHtml(EntryRenderer::daily(upgraded,offlineSettings()));QVERIFY(rendered.toPlainText().contains("1 │ Birds fly."));QVERIFY(!rendered.toPlainText().contains("A short news teaser"));
+        QTextDocument rendered;rendered.setHtml(EntryRenderer::daily(upgraded,offlineSettings()));QVERIFY(rendered.toPlainText().simplified().contains("1 │ Birds fly."));QVERIFY(!rendered.toPlainText().contains("A short news teaser"));
     }
     void cacheLeaseAndSync(){
         QTemporaryDir temp;Database a(temp.filePath("a.sqlite"),"daily"),b(temp.filePath("b.sqlite"),"daily");a.initialize();b.initialize();auto article=DailyWord::validate(response(),sources(),{},offlineSettings());auto day=article.value("Date").toString();

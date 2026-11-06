@@ -4,4 +4,9 @@
  <file alias="app-icon.png">assets/app-icon.png</file>
  <file alias="assets/app-icon.png">assets/app-icon.png</file>
  <file alias="deepseek.svg">deepseek.svg</file>
+ <file alias="birds/0.png">assets/birds/animation-review-v1/pixel-sheet-v3.png</file>
+ <file alias="birds/1.png">assets/birds/animation-review-v1/hand-sheet-v3.png</file>
+ <file alias="birds/2.png">assets/birds/animation-review-v1/photo-sheet-v2.png</file>
+ <file alias="birds/3.png">assets/birds/natural-history-review/upright.png</file>
+ <file alias="birds/4.png">assets/birds/natural-history-review/relaxed.png</file>
 </qresource></RCC>
