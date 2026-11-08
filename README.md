@@ -1,105 +1,21 @@
-# 拾词 MyDict
+# 拾词 MyDict — C++ / Qt
 
-C# / WPF 中英词典，使用 VS2022 和 .NET Framework 4.8 编译。当前固定版本为 **1.5.1**（Git 标签 `v1.5.1`），程序输出 `bin/1.5/MyDict.exe`，明确使用 x64；需要 Windows 10/11 64 位（使用系统 SQLite）。1.3、1.4、1.5.0 固定版本保持独立。
+本仓库仅维护 **Qt 版本**，支持 Windows、macOS 和 Linux。当前开发分支为 `codex/qt-cross-platform`，作者 **Yance Feng & Codex**，应用源码使用 MIT 许可。
 
-源码：[Gitee hippo-yf/MyDict](https://gitee.com/hippo-yf/MyDict)。本地便携包为 `release/MyDict-v1.5.1-win-x64.zip`，校验值位于 `release/SHA256SUMS.txt`。
+- [Qt 使用、配置和编译说明](Cpp-QT/README.md)
+- [Qt 1.7.0 下载](https://github.com/hippo-yf/MyDict/releases/tag/qt-v1.7.0)
+- [共享 SQLite 词库与 Gitee 同步](Cpp-QT/docs/SHARED_WORDBOOK.md)
+- [三平台自动构建](.github/workflows/qt-build.yml)
+- [Qt 及第三方许可](Cpp-QT/QT-NOTICES.md)
 
-## 开发交接
+## 功能
 
-完整架构、数据合同、查询流程、迁移同步、测试发布及排障说明见 [技术交接 Specification](docs/HANDOVER_SPECIFICATION.md)。
+中英查词、DeepSeek 解释、逐义双语例句与语法样式、收藏与分页、两种加权复习、今日词汇、桌面鹦鹉动画、设置热重载和 Gitee 同步。
 
-C++ / Qt 跨平台版本现已更新至 **1.6.1**（标签 `qt-v1.6.1`），[下载发布包](https://github.com/hippo-yf/MyDict/releases/tag/qt-v1.6.1)。详见 [Cpp-QT](Cpp-QT/README.md)，使用 Conda、CMake 和平台原生编译器，另有 Windows、macOS、Linux 自动构建。
+程序使用同目录设置和按 username 隔离的 `profiles/<username>/words-shared.sqlite`。缓存格式继续兼容已有公共词库；移除旧客户端源码不改变个人数据或同步格式。
 
-当前开发分支还提供 **C# 与 Qt 公共缓存版**：使用同一 `username` 和 Gitee 仓库即可共享释义、收藏与删除状态，协议为 `mydict-json-v1`，本地库为 `words-shared.sqlite`。固定发布标签 `v1.5.1` 不变；它不具备公共协议，需要升级客户端。
+## 开发
 
-使用 VS2022 执行 `tools/Build-SharedCache.ps1 -Test`，C# 共享版输出到 `bin/Shared`。可运行 `bin/Shared/SharedCacheMaintenance.exe 原settings.json路径 --data-dir bin/Shared --sync`，只读导入原词库并发布公共快照；原文件保留。完整配置及升级步骤见 [跨平台共享词库说明](Cpp-QT/docs/SHARED_WORDBOOK.md)。
+源码、CMake、Conda 环境和测试都位于 `Cpp-QT/`。Windows 编译入口为 [build-qt.ps1](Cpp-QT/build-qt.ps1)，跨平台环境定义为 [environment.yml](Cpp-QT/environment.yml)。自动构建仅编译、测试和打包 Qt。
 
-## 界面预览
-
-| 查词 | 单词本 |
-| :---: | :---: |
-| ![查词页面：逐义中英文释义、音标、词形、搭配及例句](screenshots/main.jpg) | ![单词本页面：词义摘要、来源图标与收藏管理](screenshots/words.jpg) |
-
-## 查词与单词本
-
-- 输入停顿后查询普通在线来源；DeepSeek 使用鲸鱼开关启用，点击查询、输入框回车或点击释义中的其他英文单词触发查询。开关显示短提示；已有 DeepSeek 释义时，再次联网查询前需要确认。
-- 查询按钮重新获取结果；历史箭头或 Alt+左右键切换查词记录。
-- 音标、词形、逐义中英文释义、双语例句、语法着色和搭配；摘要优先使用已有 DeepSeek 结果。
-- 单词本摘要右侧显示来源图标：DeepSeek 独立图标，普通词典和翻译网站合为一个图标。
-- 单词本每页读取 50 条摘要，可筛选、只看收藏、翻页和切换收藏；点击词条才读取完整释义。查词页星标也可取消收藏；单词本行末 X 只允许移除未收藏词。
-- Ctrl+加号/减号调整内容及单词本字号，Ctrl+[ / ] 调整行距。
-
-## SQLite 存储与加载
-
-`settings.json` 仍位于 EXE 旁，保存功能、样式、窗口位置和大小。用户内容统一保存在：
-
-```text
-profiles/<username>/words.sqlite
-```
-
-一个数据库包含单词、收藏状态和修改时间、每个来源的独立释义、查词历史及导入错误。`words` 表管理同一词的身份和收藏，`sources` 表保存多个来源；完整词条使用压缩的二进制载荷存储，不使用 JSON 缓存。SQLite 的 WAL/SHM 文件是临时事务文件，不是额外的收藏或词典副本。
-
-窗口先显示，再后台打开数据库和迁移。列表分页只查询摘要及来源元数据，不解码全部词条；内存只保留当前页和当前选中词的内容。筛选有短暂防抖，数据库读写、导出、迁移和同步都在后台执行。查词及收藏通过小事务立即提交，不再等待 30 分钟重写整份词库，关闭窗口也不扫描全部词汇或等待网络同步。
-
-旧版 `lookup-cache.json`、`favorites.json` 在后台逐条迁移，包含收藏删除记录、查询时间和来源。迁移在事务中完成，成功标记只在提交时写入；出错回滚，原 JSON 保留为备份。迁移后再次启动只检查标记，不再加载整个旧词库。
-
-可在关闭程序后手动维护和检查：
-
-```powershell
-.\tools\Migrate-Cache.ps1
-```
-
-## 跨设备同步
-
-`CacheSync` 配置 Gitee SSH 仓库、密钥路径和设备标识；用户使用固定 `username`，不同用户隔离。自动同步按首次变更起约 30 分钟批量进行，顶部同步按钮可立即触发。网络失败不影响已提交的本地数据库，可稍后重试。
-
-新版本在 Gitee 只使用每设备 `.sqlite` 快照，按来源查询时间合并词义，按收藏修改时间合并收藏和取消收藏记录；常规同步不再读取或生成 JSON 快照。快照备份和合并在后台完成，不把整份词库加载到窗口内存。需要安装 Git 并配置好 SSH；程序不会上传 `settings.json` 或 API Key。不同设备应升级为支持 SQLite 的同一版本后使用同步。
-
-## DeepSeek 与其他在线来源
-
-在 EXE 同目录 `settings.json` 的 `DeepSeek.ApiKey` 填写密钥。API 地址、模型、超时和输出 token 上限均可配置。无效或空 JSON 最多自动纠正一次；失败保留旧结果。API 查询使用账户额度。普通来源包括 MyMemory / LibreTranslate、Free Dictionary API 和 Wiktionary。
-
-所有配置字段和分组 Styles 带中文说明；修改设置后自动重载。个人设置、密钥、缓存、收藏和 `imex/` 不应提交到公开仓库。
-
-## 导入旧单词本
-
-先关闭拾词，在项目目录执行：
-
-```powershell
-# 仅预览，不调用 API
-.\tools\Import-Wordbook.ps1 -DryRun
-# 先导入 5 个词
-.\tools\Import-Wordbook.ps1 -Limit 5
-# 4 个并发查询，默认所有请求共享 1.5 秒启动间隔
-.\tools\Import-Wordbook.ps1 -Concurrency 4
-# 自定义间隔
-.\tools\Import-Wordbook.ps1 -Concurrency 4 -DelaySeconds 0.5
-```
-
-默认输入为 `imex/1.txt`，自动提取编号词头并去重。`-Concurrency` 范围 1–32，默认 1；`-ForceRefresh` 强制重新查询，`-InputFile`、`-SettingsPath` 指定其他输入或配置。已有 DeepSeek 结果默认复用，所有导入词标记为收藏；保留已有收藏，不改变查词历史位置。
-
-每个成功结果直接写入 SQLite 事务，中断后重新执行即可续传，不再写 JSONL 结果缓存。旧 JSONL 断点会一次性恢复并留作备份。失败记录位于数据库 `import_errors` 表；401/402/403 或连续失败会停止安排新词，已发出的查询完成后保存成功结果。导入不主动上传，下次由应用按同步设置处理。
-
-## 编译、测试、打包
-
-VS2022 安装“.NET 桌面开发”和 .NET Framework 4.8 开发工具；打开解决方案，选择 Release / x64。
-
-```powershell
-.\build.ps1
-.\tools\Test-Release.ps1
-.\tools\Package-Release.ps1
-```
-
-回归测试使用模拟 API 和本地 Git 仓库，不消耗付费 API。显式执行 `tools/Test-DeepSeekLive.ps1` 才调用真实 DeepSeek 服务。发布脚本只复制程序、许可和示例配置，不包含个人数据库和密钥。
-
-## 许可
-
-源码采用 [MIT](LICENSE)。在线词典内容遵循各自许可，SQLite 使用 Windows 提供的运行库。详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-
-## 随程序字体
-
-程序优先从 EXE 同目录 `fonts/`（含子目录）按字体族名称匹配 `.ttf`、`.otf`、`.ttc`、`.otc`；未找到时自动使用同名系统字体。目录索引只读取字体名称元数据，不会把全部字体交给渲染引擎。只有界面实际使用相应 `font.*` 样式时，才加载该字体族及其粗体、斜体变体；未使用的设置、关于窗口和兼容字段不会提前加载字体。修改样式后按需解析，新添加的本地字体在下次实际使用时可被发现，无需安装到 Windows。
-
-WPF 将所需字体族单独放入 EXE 同目录的 `.font-cache/`，优先使用硬链接；目录不可写时使用当前用户的本地应用数据目录。每个集合只含该字体族，避免 WPF 枚举整个 `fonts/`。WPF 自身可能在本进程内保留已用字体，切换样式后不保证立即释放这些内部缓存。
-
-仓库和发布包包含 CaskaydiaCove NFP 的常规、粗体、斜体和粗斜体以及许可文本。本机使用的 Windows 字体位于 `fonts/local/`，只用于本地构建，不提交到仓库或公开发布包；公开版本缺少这些文件时使用系统字体。
+C# 和 Windows 原生 C++ 客户端已停止维护并从当前源码树移除。旧发布标签和历史提交保留供追溯，不属于当前开发分支。个人设置、词库、密钥和本机额外文件不提交到仓库。

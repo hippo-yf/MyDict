@@ -1,8 +1,8 @@
 # 拾词 MyDict — C++ / Qt
 
-以 C# / WPF **1.5.1** 为功能基线的 Qt Widgets 版本，C++17、Qt 6、CMake、Conda。作者 **Yance Feng & Codex**，应用源码 MIT 许可。保留逐义双语释义、DeepSeek、收藏/查询统一 SQLite、历史、分页、字体样式热更新、导入和 Gitee 同步。本次共享版本让 **C#、Windows Qt、macOS Qt、Linux Qt 通过同一 Gitee 词库双向共享**。
+本仓库当前仅维护 Qt Widgets 版本：C++17、Qt 6、CMake、Conda，支持 Windows、macOS、Linux。作者 **Yance Feng & Codex**，应用源码 MIT 许可。保留逐义双语释义、DeepSeek、收藏/查询统一 SQLite、历史、分页、字体样式热更新、复习、今日词汇、动画、导入和 Gitee 同步。
 
-跨平台接入步骤、升级和格式约定见 [共享词库说明](docs/SHARED_WORDBOOK.md)，配置参考 [共享用户示例](configs/shared-user.example.json)。固定旧版 `v1.5.1` 不支持公共 JSON 载荷，参与共享的 C# 与 Qt 客户端都需要升级到本次共享版本。
+跨平台接入与缓存格式见 [共享词库说明](docs/SHARED_WORDBOOK.md)，配置参考 [共享用户示例](configs/shared-user.example.json)。已有 C# 公共格式缓存仍兼容；C# 和原生 C++ 客户端源码、构建及开发分支已移除，旧发布标签保留。
 
 ## Qt 1.7.0 下载
 
@@ -131,22 +131,11 @@ MyDictTool --data-dir /path/to/mydict-data --check
 
 旧本地 `words-qt.sqlite`、C# 的 `words.sqlite` 和远端旧快照均保留。Qt 启动显示窗口后，在后台只读导入旧 Qt 库；新版 C# 可读取旧二进制 XML、旧 Qt JSON 和公共 JSON，并把旧内容转换为公共快照。Qt 不尝试解析旧 .NET 二进制 XML，需要由新版 C# 完成这一步转换。历史和导入错误属于本地状态，不在设备间合并。
 
-## 接入现有 C# 和 Qt 词库
+## 接入现有共享词库
 
-日常跨平台共享不再需要手动导出文件：
+三平台 Qt 使用相同 username 和 Gitee 仓库地址，各自配置本机 SSH 权限，启用 CacheSync 后点击同步即可。现有 `words-shared.sqlite` 和公共快照直接兼容，旧 Qt 库仍在后台只读导入，无需删除或重新查询。
 
-1. 在持有旧 C# 词库的 Windows 设备上升级为本次共享版本，保留原 `settings.json`、`profiles/` 和旧 SQLite。先确认 `username` 是自己要共用的身份。
-2. 使用新版 C# 点击“同步”，它会读取旧本地及旧远端二进制快照，并发布公共 JSON 快照。原文件保留。C# 共享版的编译和部署入口见 [仓库 README](../README.md)。
-3. 在 Windows/macOS/Linux Qt 中填写相同 `username` 和仓库地址，各自配置本机 SSH 权限，启用 `CacheSync` 后点击“同步”。三平台即可读取这些公共释义、收藏和删除状态；新的查询和变更也会同步回 C#。
-4. 已使用 Qt 版的设备会在后台导入本机旧 Qt 库；同步时兼容读取 `qt-users/<username>/` 的旧 Qt 快照，并发布到公共目录，无需删除旧文件。
-
-如果只有旧 C# 数据的离线副本，或者暂时不能运行新版 C#，仍可使用可选的只读导出工具。在 Windows 根仓库中执行：
-
-```powershell
-.\Cpp-QT\tools\Export-Legacy.ps1 -SourceDatabase '原路径\profiles\用户名\words.sqlite' -OutputFile '新路径\mydict-migration.ndjson'
-```
-
-该工具使用原 `MyDict.exe` 中的 DTO 解码，在只读事务中逐条导出。可用 `-LegacyExe` 指定旧程序。原库不改写；导出文件包含全部来源、收藏/取消收藏事件、删除标记、历史和导入错误，应像个人词库一样保密。
+已经导出的 `mydict-portable-v1` NDJSON 迁移文件仍可导入。旧 .NET 二进制 XML 需要先使用历史版本工具转换；当前 Qt 源码树不再附带 C# 导出工具。原始旧库应保留。
 
 Qt 目标配置 `username` 应与源库相同，再执行：
 
@@ -184,7 +173,7 @@ users/<username>/shared/qt-<device-hash>.sqlite
 
 C# 与 Qt 每个客户端写自己的分片，并按来源查询时间、收藏事件及删除标记合并其他分片。这里的 `cs`/`qt` 只区分写入客户端，公共数据格式相同；无需为每个平台创建独立词库。旧 `users/<username>/*.sqlite` 和 `qt-users/<username>/*.sqlite` 保留为兼容读取来源，不会因升级被删除或原地覆盖。
 
-共享身份相同才会交换数据，不共享 API Key、SSH 私钥、`settings.json`、字体或窗口状态。不生成 JSON 快照。具体配置和升级检查见 [共享词库说明](docs/SHARED_WORDBOOK.md)。固定旧版 1.5.1 不读取公共 JSON，应升级后再参与新的双向共享。
+共享身份相同才会交换数据，不共享 API Key、SSH 私钥、`settings.json`、字体或窗口状态。不生成 JSON 快照。具体配置和升级检查见 [共享词库说明](docs/SHARED_WORDBOOK.md)。旧版 1.5.1 不读取公共 JSON；旧版数据兼容说明仅用于历史迁移。
 
 ## 测试与代码入口
 

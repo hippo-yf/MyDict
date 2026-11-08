@@ -51,3 +51,6 @@ cache-sync/
 !/tests/SharedMaintenanceTests.cs
 # Generated WPF per-family font collections (may link local licensed fonts).
 .font-cache/
+
+# Preserved private data from retired clients
+/local-data/

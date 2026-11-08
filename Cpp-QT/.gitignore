@@ -55,4 +55,6 @@ cache-sync/
 *.log
 *.ndjson
 !/tests/*_test.cpp
-!/tools/Export-Legacy.cs
+
+
+__pycache__/

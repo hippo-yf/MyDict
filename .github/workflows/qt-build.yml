@@ -3,8 +3,8 @@ on:
   workflow_dispatch:
   push:
     tags: ["qt-v*"]
-    branches: ["codex/qt-cross-platform", "develop/1.5", "main"]
-    paths: ["Cpp-QT/src/**", "Cpp-QT/tests/*_test.cpp", "Cpp-QT/CMakeLists.txt", "Cpp-QT/resources.qrc", "Cpp-QT/environment.yml", "Cpp-QT/tools/package-qt.py", "Cpp-QT/packaging/**", "Cpp-QT/*.json", "Cpp-QT/QT-NOTICES.md", "*.cs", "MyDict.csproj", "tools/**", "tests/*.cs", ".github/workflows/qt-build.yml"]
+    branches: ["codex/qt-cross-platform"]
+    paths: ["Cpp-QT/src/**", "Cpp-QT/tests/*_test.cpp", "Cpp-QT/CMakeLists.txt", "Cpp-QT/resources.qrc", "Cpp-QT/environment.yml", "Cpp-QT/tools/package-qt.py", "Cpp-QT/packaging/**", "Cpp-QT/*.json", "Cpp-QT/QT-NOTICES.md", ".github/workflows/qt-build.yml"]
   pull_request:
     paths: ["Cpp-QT/**", ".github/workflows/qt-build.yml"]
 permissions:
@@ -58,20 +58,8 @@ jobs:
         run: |
           if [[ "$RUNNER_OS" == Windows ]]; then export QT_PLUGIN_PATH="$CONDA_PREFIX/Library/lib/qt6/plugins"; fi
           ctest --test-dir Cpp-QT/build/ci -C Release --output-on-failure --output-junit test-results.xml
-      - name: Build and test CSharp shared client
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./tools/Build-SharedCache.ps1 -OutputDirectory Cpp-QT/build/csharp-shared -Test
-      - name: Cross-client SQLite and Git integration
-        if: runner.os == 'Windows'
-        run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File tools/Test-SharedCache.ps1 -CSharpDirectory Cpp-QT/build/csharp-shared -QtTool Cpp-QT/build/ci/Release/MyDictTool.exe -QtPrefix "$CONDA_PREFIX"
       - name: Package native application
         run: python Cpp-QT/tools/package-qt.py --build Cpp-QT/build/ci --prefix "$CONDA_PREFIX" --output Cpp-QT/dist
-      - name: Package CSharp shared client
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./tools/Package-SharedCache.ps1 -CSharpDirectory Cpp-QT/build/csharp-shared -OutputDirectory Cpp-QT/dist/csharp
       - name: Smoke test packaged application
         env:
           QT_QPA_PLATFORM: offscreen
@@ -85,16 +73,6 @@ jobs:
             Cpp-QT/dist/*.zip
             Cpp-QT/dist/*.tar.gz
             Cpp-QT/dist/*.sha256
-          if-no-files-found: error
-          retention-days: 30
-      - name: Upload CSharp shared client
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: MyDict-CSharp-shared-windows-x64
-          path: |
-            Cpp-QT/dist/csharp/*.zip
-            Cpp-QT/dist/csharp/*.sha256
           if-no-files-found: error
           retention-days: 30
       - name: Upload test results
