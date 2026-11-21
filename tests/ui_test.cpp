@@ -163,11 +163,11 @@ private slots:
         QVERIFY(unfamiliar);
         QVERIFY(!window.findChild<QPushButton *>("reviewNext"));
         QVERIFY(!window.findChild<QLabel *>("reviewFeedback"));
-        auto *word = window.findChild<QLabel *>("reviewWord");
+        auto *word = window.findChild<QTextBrowser *>("reviewWord");
         auto *first = window.findChild<QPushButton *>("reviewChoice0");
         QTRY_VERIFY(first->isVisible() && first->isEnabled());
         QCOMPARE(pages->currentIndex(), 2);
-        QCOMPARE(word->text(), QString("run"));
+        QCOMPARE(word->toPlainText(), QString("run"));
         QCOMPARE(first->findChild<QLabel *>()->alignment(), Qt::Alignment(Qt::AlignCenter));
         QVERIFY(unfamiliar->isEnabled());
         window.grab().save(QCoreApplication::applicationDirPath()+"/../ui-review-question.png");
@@ -194,7 +194,7 @@ private slots:
             if (choice->findChild<QLabel *>()->text().contains(QStringLiteral("跑；经营"))) correct = choice;
         }
         QTest::mouseClick(correct, Qt::LeftButton);
-        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - .91) < 1e-12);
+        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.17) < 1e-12);
         QTRY_VERIFY(first->isVisible() && first->isEnabled());
 
         // A page click during the pending write is honored after commit.
@@ -206,17 +206,17 @@ private slots:
             QVERIFY(lock.exec("BEGIN IMMEDIATE"));
             QTest::mouseClick(unfamiliar, Qt::LeftButton);
             QVERIFY(!first->isEnabled());
-            QTest::mouseClick(word, Qt::LeftButton);
+            QTest::mouseClick(first, Qt::LeftButton);
             bool heartbeat = false;
             QTimer::singleShot(80, [&] { heartbeat = true; lock.exec("ROLLBACK"); });
             QTRY_VERIFY(heartbeat);
             QTRY_VERIFY(first->isVisible() && first->isEnabled());
-            QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.183) < 1e-12);
+            QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.521) < 1e-12);
             blocker.close();
         }
         QSqlDatabase::removeDatabase("review-write-lock");
         QTest::mouseClick(unfamiliar, Qt::LeftButton);
-        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.5379) < 1e-12);
+        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.9773) < 1e-12);
         QVERIFY(!first->isEnabled());
         for (int i = 0; i < 4; ++i) {
             auto *choice = window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i));
@@ -228,14 +228,14 @@ private slots:
         QVERIFY(mode);
         QTRY_VERIFY(mode->isEnabled());
         mode->setCurrentIndex(1);
-        QTRY_VERIFY(first->isVisible() && first->isEnabled() && word->text().contains("____"));
+        QTRY_VERIFY(first->isVisible() && first->isEnabled() && word->toPlainText().contains("____"));
         QTextDocument sentenceDocument;
-        sentenceDocument.setHtml(word->text());
+        sentenceDocument.setHtml(word->toHtml());
         QCOMPARE(sentenceDocument.toPlainText(), QString("They ____ every day."));
-        QVERIFY(word->text().contains("#2563a6", Qt::CaseInsensitive));
-        QVERIFY(word->text().contains("font-style:italic"));
+        QVERIFY(word->toHtml().contains("#2563a6", Qt::CaseInsensitive));
+        QVERIFY(word->toHtml().contains("font-style:italic"));
         QCOMPARE(mode->itemText(1), QStringLiteral("选词填空"));
-        QVERIFY(!word->text().contains("run", Qt::CaseInsensitive));
+        QVERIFY(!word->toPlainText().contains("run", Qt::CaseInsensitive));
         window.grab().save(QCoreApplication::applicationDirPath()+"/../ui-review-cloze.png");
         for (int i = 0; i < 4; ++i) {
             auto *choice = window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i));
@@ -245,7 +245,7 @@ private slots:
         QList<QRect> optionRects;
         for (int i = 0; i < 4; ++i) optionRects.append(window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i))->geometry());
         QTest::mouseClick(correct, Qt::LeftButton);
-        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.07653) < 1e-12);
+        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.77957) < 1e-12);
         QVERIFY(!first->isEnabled());
         auto *translation = window.findChild<QLabel *>("reviewPrompt");
         QVERIFY(translation->isVisible());
@@ -264,11 +264,11 @@ private slots:
             QVERIFY(window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i))->findChild<QLabel *>("reviewChoiceMeaning")->isVisible());
             QVERIFY(!text.contains(QStringLiteral("正确")));
         }
-        QTest::mouseClick(word, Qt::LeftButton);
+        QTest::mouseClick(first, Qt::LeftButton);
         QTRY_VERIFY(first->isVisible() && first->isEnabled());
         QVERIFY(!translation->isVisible());
         QTest::mouseClick(unfamiliar, Qt::LeftButton);
-        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 1.399489) < 1e-12);
+        QTRY_VERIFY(std::abs(reviewWeight(db.path()) - 2.313441) < 1e-12);
         QVERIFY(!first->isEnabled());
         QStringList feedback;
         for (int i = 0; i < 4; ++i) {
@@ -280,21 +280,21 @@ private slots:
             QVERIFY(!text.contains(QStringLiteral("正确")));
             feedback.append(text);
         }
-        const auto savedSentence = word->text();
+        const auto savedSentence = word->toPlainText();
         QTest::mouseClick(window.findChild<QPushButton *>("lookupTab"), Qt::LeftButton);
         QCOMPARE(pages->currentIndex(), 0);
         input->setText("apple");
         QTest::qWait(800);
         QTest::mouseClick(window.findChild<QPushButton *>("bookTab"), Qt::LeftButton);
         QCOMPARE(pages->currentIndex(), 2);
-        QCOMPARE(word->text(), savedSentence);
+        QCOMPARE(word->toPlainText(), savedSentence);
         QVERIFY(!first->isEnabled());
         QCOMPARE(mode->currentIndex(), 1);
         for (int i = 0; i < 4; ++i)
             QCOMPARE(window.findChild<QPushButton *>(QString("reviewChoice%1").arg(i))->findChild<QLabel *>()->text(), feedback.at(i));
-        QVERIFY(std::abs(reviewWeight(db.path()) - 1.399489) < 1e-12);
+        QVERIFY(std::abs(reviewWeight(db.path()) - 2.313441) < 1e-12);
         window.grab().save(QCoreApplication::applicationDirPath()+"/../ui-review-cloze-feedback.png");
-        QTest::mouseClick(word, Qt::LeftButton);
+        QTest::mouseClick(first, Qt::LeftButton);
         QTRY_VERIFY(first->isVisible() && first->isEnabled());
         QTest::mouseClick(window.findChild<QPushButton *>("reviewExit"), Qt::LeftButton);
         QCOMPARE(pages->currentIndex(), 1);
@@ -335,7 +335,7 @@ private slots:
         QTest::qWait(100);
         QCOMPARE(pages->currentIndex(), 1);
         QTest::mouseClick(start, Qt::LeftButton);
-        QTRY_VERIFY(window.findChild<QLabel *>("reviewWord")->text().contains(QStringLiteral("暂时无法出题")));
+        QTRY_VERIFY(window.findChild<QTextBrowser *>("reviewWord")->toPlainText().contains(QStringLiteral("暂时无法出题")));
         QVERIFY(window.findChild<QLabel *>("notice")->text().contains(QStringLiteral("收藏")));
         QVERIFY(!window.findChild<QPushButton *>("reviewChoice0")->isVisible());
         QTest::mouseClick(exit, Qt::LeftButton);
@@ -611,3 +611,4 @@ private slots:
 };
 QTEST_MAIN(UiTest)
 #include "ui_test.moc"
+
