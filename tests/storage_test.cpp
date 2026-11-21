@@ -71,6 +71,35 @@ void makeOldQtSnapshot(QString path) {
 class StorageTest : public QObject {
     Q_OBJECT
 private slots:
+    void reviewWeightsSyncAndReorder() {
+        QTemporaryDir temp;
+        Database a(temp.filePath("a.sqlite"), "tester"), b(temp.filePath("b.sqlite"), "tester");
+        a.initialize(); b.initialize();
+        for (const auto &word : QStringList{"apple", "pear", "book", "run"})
+            a.store(entry(word, word + " meaning", "2026-11-04T00:00:00Z"));
+        a.setFavorite("apple", "en|zh-CN", true);
+        b.mergeFrom(a.path());
+        const auto before = a.revision();
+        auto question = a.reviewQuestion();
+        QVERIFY(a.answerReview(question, -1));
+        QVERIFY(a.revision() > before);
+        b.mergeFrom(a.path());
+        QCOMPARE(b.page("", false, 0).rows.first().word, QString("apple"));
+        const auto merged = b.revision();
+        b.mergeFrom(a.path());
+        QCOMPARE(b.revision(), merged);
+        question = b.reviewQuestion();
+        QVERIFY(b.answerReview(question, question.correctIndex));
+        a.mergeFrom(b.path());
+        QCOMPARE(a.page("", false, 0).rows.first().word, QString("apple"));
+        // A stale snapshot must not overwrite the newer answer on this device.
+        const auto snapshot = temp.filePath("old.sqlite");
+        a.backupTo(snapshot);
+        question = a.reviewQuestion();
+        QVERIFY(a.answerReview(question, -1));
+        a.mergeFrom(snapshot);
+        QCOMPARE(a.page("", false, 0).rows.first().word, QString("apple"));
+    }
     void wordbookOrdersByReviewWeightAcrossPages() {
         QTemporaryDir temp;
         Database db(temp.filePath("words.sqlite"), "tester");
@@ -86,7 +115,7 @@ private slots:
         QCOMPARE(db.page("", true, 0).rows.first().word, QString("apple"));
         question = db.reviewQuestion();
         QVERIFY(db.answerReview(question, question.correctIndex));
-        QCOMPARE(db.page("", false, 3, 1).rows.first().word, QString("apple"));
+        QCOMPARE(db.page("", false, 0, 1).rows.first().word, QString("apple"));
         QCOMPARE(db.page("", false, 0).total, 4);
         sql(db.path(), [&](QSqlDatabase &connection) {
             QSqlQuery q(connection);
@@ -183,16 +212,16 @@ private slots:
         QVERIFY(std::abs(weight() - 1.3) < 1e-12);
         question = db.reviewQuestion();
         QVERIFY(db.answerReview(question, question.correctIndex));
-        QVERIFY(std::abs(weight() - .91) < 1e-12);
-        QCOMPARE(db.revision(), revision);
+        QVERIFY(std::abs(weight() - 1.17) < 1e-12);
+        QCOMPARE(db.revision(), revision + 2); // Two distinct answers must trigger cache sync.
         Database reopened(db.path(), "tester");
         reopened.initialize();
-        QVERIFY(std::abs(weight() - .91) < 1e-12);
+        QVERIFY(std::abs(weight() - 1.17) < 1e-12);
         question = db.reviewQuestion();
         QVERIFY(db.answerReview(question, -1));
-        QVERIFY(std::abs(weight() - 1.183) < 1e-12);
+        QVERIFY(std::abs(weight() - 1.521) < 1e-12);
         QVERIFY(db.answerReview(question, -1));
-        QVERIFY(std::abs(weight() - 1.183) < 1e-12);
+        QVERIFY(std::abs(weight() - 1.521) < 1e-12);
         db.setFavorite("pear", "en|zh-CN", true);
         sql(db.path(), [&](QSqlDatabase &connection) {
             QSqlQuery q(connection);

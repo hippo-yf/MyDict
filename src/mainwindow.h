@@ -20,8 +20,10 @@ class QCloseEvent;
 class QScrollArea;
 class QComboBox;
 namespace MyDict {
+class BirdPet;
 class OnlineService;
 class DailyPage;
+class ReviewBrowser;
 class EntryBrowser;
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -43,6 +45,8 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
 private:
+    BirdPet *birdPet = nullptr;
+    QPushButton *birdToggle = nullptr;
     Settings settings;
     Database database;
     QString activeUsername;
@@ -81,7 +85,8 @@ private:
     QListWidget *book = nullptr;
     QLabel *pageLabel = nullptr, *notice = nullptr, *emptyBook = nullptr;
     QPushButton *previous = nullptr, *next = nullptr;
-    QLabel *reviewWord = nullptr, *reviewPrompt = nullptr;
+    ReviewBrowser *reviewWord = nullptr;
+    QLabel *reviewPrompt = nullptr;
     QComboBox *reviewMode = nullptr;
     QList<QPushButton *> reviewChoices;
     QPushButton *reviewUnfamiliar = nullptr, *reviewExit = nullptr;

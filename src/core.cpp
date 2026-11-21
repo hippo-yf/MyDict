@@ -534,12 +534,21 @@ void Database::initialize() {
         QStringLiteral("CREATE TABLE IF NOT EXISTS deleted_words(normalized TEXT NOT NULL,pair TEXT NOT NULL,deleted_ticks INTEGER NOT NULL,PRIMARY KEY(normalized,pair))"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS history(position INTEGER PRIMARY KEY,source_key TEXT NOT NULL)"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS import_errors(id INTEGER PRIMARY KEY,word TEXT NOT NULL,error TEXT NOT NULL,at TEXT NOT NULL)"),
+        QStringLiteral("CREATE TABLE IF NOT EXISTS review_state(normalized TEXT NOT NULL,pair TEXT NOT NULL,log_weight REAL NOT NULL,updated_ms INTEGER NOT NULL,token TEXT NOT NULL,PRIMARY KEY(normalized,pair))"),
+        QStringLiteral("CREATE TABLE IF NOT EXISTS review_order(word_id INTEGER PRIMARY KEY,sequence INTEGER NOT NULL)"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS review_weights(word_id INTEGER PRIMARY KEY,log_weight REAL NOT NULL DEFAULT 0,last_answer TEXT NOT NULL DEFAULT '')"),
         QStringLiteral("CREATE TRIGGER IF NOT EXISTS remove_review_weight AFTER DELETE ON words BEGIN DELETE FROM review_weights WHERE word_id=OLD.id; END"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS source_word ON sources(word_id,ticks DESC)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS word_recent ON words(last_ticks DESC,id DESC)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS word_favorite ON words(favorite,last_ticks DESC,id DESC)")};
     for (const auto &sql : schema) query(c.db, sql);
+    for (const auto &column : QStringList{"m", "n"}) {
+        bool found=false; auto columns=query(c.db,"PRAGMA table_info(review_state)");
+        while(columns.next()) if(columns.value(1).toString()==column) found=true;
+        if(!found) query(c.db,"ALTER TABLE review_state ADD COLUMN "+column+" INTEGER NOT NULL DEFAULT 0");
+    }
+    const auto migrated=query(c.db,"INSERT OR IGNORE INTO review_state(normalized,pair,log_weight,updated_ms,token) SELECT w.normalized,w.pair,r.log_weight,0,r.last_answer FROM review_weights r JOIN words w ON w.id=r.word_id");
+    if(migrated.numRowsAffected()>0) dirty(c.db);
     query(c.db, "CREATE TABLE IF NOT EXISTS daily_articles(day TEXT PRIMARY KEY,word TEXT NOT NULL,created_at TEXT NOT NULL,payload BLOB NOT NULL)");
     setMeta(c.db, QStringLiteral("username"), user); setMeta(c.db, QStringLiteral("schema"), QStringLiteral("1"));
     setMeta(c.db, QStringLiteral("payload_format"), PayloadFormat);
@@ -676,7 +685,7 @@ BookPage Database::page(QString filter, bool favoritesOnly, int offset, int limi
     parameters << limit << offset;
     const bool weightsAvailable = hasTable(c.db, QStringLiteral("review_weights"));
     const auto weightJoin = weightsAvailable ? QStringLiteral(" LEFT JOIN review_weights r ON r.word_id=w.id") : QString();
-    const auto weightOrder = weightsAvailable ? QStringLiteral("COALESCE(r.log_weight,0) DESC,") : QString();
+    const auto weightOrder = weightsAvailable ? QStringLiteral("COALESCE(r.log_weight,0) DESC,") + (hasTable(c.db,QStringLiteral("review_state")) ? QStringLiteral("COALESCE((SELECT updated_ms FROM review_state WHERE normalized=w.normalized AND pair=w.pair),0) DESC,") : QString()) + (hasTable(c.db,QStringLiteral("review_order")) ? QStringLiteral("COALESCE((SELECT sequence FROM review_order WHERE word_id=w.id),0) DESC,") : QString()) : QString();
     auto rows = query(c.db, QStringLiteral("SELECT w.id,w.word,w.pair,w.summary,w.favorite,EXISTS(SELECT 1 FROM sources s WHERE s.word_id=w.id AND s.is_ai=1),EXISTS(SELECT 1 FROM sources s WHERE s.word_id=w.id AND s.is_ai=0) FROM words w") + weightJoin + likeWhere() + QStringLiteral(" ORDER BY ") + weightOrder + QStringLiteral("w.last_ticks DESC,w.id DESC LIMIT ? OFFSET ?"), parameters);
     while (rows.next()) {
         BookRow row; row.id = rows.value(0).toLongLong(); row.word = rows.value(1).toString(); row.pair = rows.value(2).toString(); row.summary = rows.value(3).toString();
@@ -780,9 +789,16 @@ bool Database::answerReview(const ReviewQuestion &question, int selected) {
         return false;
     }
     query(c.db, QStringLiteral("INSERT OR IGNORE INTO review_weights(word_id) VALUES(?)"), {question.wordId});
-    query(c.db, QStringLiteral(
+    const auto updated = query(c.db, QStringLiteral(
         "UPDATE review_weights SET log_weight=log_weight+?,last_answer=? WHERE word_id=? AND last_answer<>?"),
-        {std::log(selected == question.correctIndex ? 0.7 : 1.3), question.token, question.wordId, question.token});
+        {std::log(selected == question.correctIndex ? 0.9 : 1.3), question.token, question.wordId, question.token});
+    if(updated.numRowsAffected()>0) query(c.db,QStringLiteral("INSERT OR REPLACE INTO review_order(word_id,sequence) VALUES(?,(SELECT COALESCE(MAX(sequence),0)+1 FROM review_order))"),{question.wordId});
+    if(updated.numRowsAffected()>0){
+        const auto stamp=qMax(QDateTime::currentMSecsSinceEpoch(),scalar(c.db,"SELECT COALESCE(MAX(updated_ms),0)+1 FROM review_state").toLongLong());
+        query(c.db,"INSERT INTO review_state(normalized,pair,log_weight,updated_ms,token,m,n) SELECT w.normalized,w.pair,r.log_weight,?,?,?,? FROM words w JOIN review_weights r ON r.word_id=w.id WHERE w.id=? ON CONFLICT(normalized,pair) DO UPDATE SET log_weight=excluded.log_weight,updated_ms=excluded.updated_ms,token=excluded.token,m=review_state.m+excluded.m,n=review_state.n+excluded.n",{stamp,question.token,selected==question.correctIndex ? 1 : 0,selected==question.correctIndex ? 0 : 1,question.wordId});
+        dirty(c.db);
+    }
+
     tx.commit();
     return true;
 }
@@ -988,6 +1004,23 @@ void Database::mergeFrom(QString sqlitePath) {
     if(hasTable(remote.db,"daily_articles")) {
         auto articles=query(remote.db,"SELECT payload FROM daily_articles ORDER BY day");
         while(articles.next())saveDailyArticle(QJsonDocument::fromJson(articles.value(0).toByteArray()).object());
+    }
+    if(hasTable(remote.db,"review_state")){
+        bool counts=false; auto columns=query(remote.db,"PRAGMA table_info(review_state)");
+        while(columns.next()) if(columns.value(1).toString()=="m") counts=true;
+        auto states=query(remote.db,counts ? "SELECT normalized,pair,log_weight,updated_ms,token,m,n FROM review_state" : "SELECT normalized,pair,log_weight,updated_ms,token,0,0 FROM review_state");
+        Connection target(filePath);verify(target.db,user);Transaction transaction(target.db);bool changed=false;
+        while(states.next()){
+            const auto normalized=states.value(0).toString(),pair=states.value(1).toString(),token=states.value(4).toString();
+            const auto stamp=states.value(3).toLongLong();const double weight=states.value(2).toDouble();
+            if(!std::isfinite(weight)||stamp<0)continue;
+            auto old=query(target.db,"SELECT updated_ms,token FROM review_state WHERE normalized=? AND pair=?",{normalized,pair});
+            if(old.next()&&(old.value(0).toLongLong()>stamp||(old.value(0).toLongLong()==stamp&&old.value(1).toString()>=token)))continue;
+            query(target.db,"INSERT OR REPLACE INTO review_state(normalized,pair,log_weight,updated_ms,token,m,n) VALUES(?,?,?,?,?,?,?)",{normalized,pair,weight,stamp,token,states.value(5),states.value(6)});
+            query(target.db,"INSERT OR REPLACE INTO review_weights SELECT id,?,? FROM words WHERE normalized=? AND pair=?",{weight,token,normalized,pair});
+            changed=true;
+        }
+        if(changed)dirty(target.db);transaction.commit();
     }
     Connection local(filePath); verify(local.db, user); Transaction tx(local.db); setMeta(local.db, key, fingerprint); tx.commit();
 }

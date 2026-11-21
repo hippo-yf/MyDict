@@ -8,6 +8,7 @@ namespace MyDict {
 class BirdPet : public QWidget {
 public:
     explicit BirdPet(QWidget *owner);
+    void setPetVisible(bool visible);
 protected:
     bool eventFilter(QObject *, QEvent *) override;
     void paintEvent(QPaintEvent *) override;
@@ -20,6 +21,7 @@ private:
     QTimer timer;
     QVector<QPair<int,int>> sequence;
     QPoint offset, pressGlobal, pressPosition;
+    bool enabled=true;
     bool pressed=false, dragged=false, ready=false;
     int variant=0, frame=0, step=0;
     void follow();

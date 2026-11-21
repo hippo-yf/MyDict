@@ -46,16 +46,17 @@ BirdPet::BirdPet(QWidget *owner):QWidget(owner,Qt::Tool|Qt::FramelessWindowHint|
         }return result;
     }));
 }
+void BirdPet::setPetVisible(bool visible){enabled=visible;if(!enabled){hide();timer.stop();}else{follow();if(ready)timer.start(3000);}}
 void BirdPet::follow(){
     if(!ready)return;
-    if(!host->isVisible()||host->isMinimized()){hide();return;}
+    if(!enabled||!host->isVisible()||host->isMinimized()){hide();return;}
     move(host->mapToGlobal(QPoint())+offset);show();raise();
 }
 bool BirdPet::eventFilter(QObject *object,QEvent *event){
     if(object==host){
         if(event->type()==QEvent::Hide||event->type()==QEvent::Close){hide();timer.stop();}
         else if(event->type()==QEvent::Move||event->type()==QEvent::Resize||event->type()==QEvent::Show||event->type()==QEvent::WindowStateChange){
-            follow();if(ready&&!timer.isActive())timer.start(3000);
+            follow();if(enabled&&ready&&!timer.isActive())timer.start(3000);
         }
     }return QWidget::eventFilter(object,event);
 }

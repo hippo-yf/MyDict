@@ -2,6 +2,9 @@
 #include "core.h"
 #include "appfonts.h"
 #include <QFile>
+#include <QLabel>
+#include <QHBoxLayout>
+#include <QResizeEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMouseEvent>
@@ -148,29 +151,43 @@ public:
         if (part.startsWith("conj.")) return "conjunction";
         return part;
     }
-    QString render(const QJsonObject &entry, const QString &selectedPart, int portion = 0) const {
+    QString render(const QJsonObject &entry, const QString &selectedPart, int portion = 0, bool inlineParts = false) const {
         const auto record = entry.value("Record").toObject();
         const auto meanings = record.value("Meanings").toArray();
         QStringList parts;
         for (auto value : meanings) { QString part = value.toObject().value("PartOfSpeech").toString(); if (!parts.contains(part)) parts << part; }
         QString out = "<html><body style=\"margin:4px;\">";
         if (portion == 0 && !parts.isEmpty()) {
-            out += "<p style=\"margin:0 0 5px 0;\">";
-            bool first=true;
+            out += "<table cellspacing=\"5\" cellpadding=\"6\"><tr>";
             for(const auto &part:parts+QStringList{"All"}) {
-                if(!first)out += "&nbsp; ";
-                first=false;
+
                 const bool active=part==selectedPart||(part=="All"&&selectedPart.isEmpty());
                 const auto label=part=="All"?part:englishPart(part);
                 const auto href=escape(QString::fromLatin1(QUrl::toPercentEncoding(part=="All"?QString():part)));
-                out += "<a style=\"font-family:'"+font("font.mainwindow.window.1.fontfamily","Microsoft YaHei UI")+"';font-size:"+QString::number(16*scale)+"px;font-weight:900\" href=\"pos:"+href+"\"><img alt=\""+escape(label)+"\" src=\"mydict-pos:"+(active?"active":"inactive")+"\" /></a>";
+                out += "<td bgcolor=\""+QString(active?"#4E8848":"#DCEED9")+"\">";
+                out += "<a style=\"font-family:'"+font("font.mainwindow.window.1.fontfamily","Microsoft YaHei UI")+"';font-size:"+QString::number(18*scale)+"px;font-weight:900;text-decoration:none;color:"+(active?"#FFFFFF":"#315E35")+"\" href=\"pos:"+href+"\">&nbsp;"+escape(label)+"&nbsp;</a></td>";
             }
-            out += "</p>";
+            out += "</tr></table>";
         }
         if (portion != 2) {
         out += paragraph("<b>" + escape(entry.value("Word").toString()) + "</b> <span style=\"font-size:" + QString::number(17 * scale) + "px;font-family:'" + font("font.doc.body", "sans-serif") + "';color:" + clr("#008577") + ";\">" + escape(shortTranslation(entry)) + "</span>", 34, clr("#0074CB"), true, {}, 3);
         QString phonetic = record.value("Phonetic").toString();
-        if (!phonetic.isEmpty()) out += paragraph(escape(phonetic), 20, clr("#0874C4"), false, "font-family:'" + font("font.doc.phonetic", "sans-serif") + "';", 1);
+        QString phoneticLine = escape(phonetic);
+        if (inlineParts) {
+            QStringList headParts;
+            for (const auto &value : meanings) {
+                const auto part = value.toObject().value("PartOfSpeech").toString().trimmed();
+                if (!part.isEmpty() && !headParts.contains(part)) headParts << part;
+            }
+            if (!headParts.isEmpty()) {
+                if (!phoneticLine.isEmpty()) phoneticLine += "&nbsp;&nbsp;";
+                phoneticLine += "<span style=\"font-family:'" + font("font.doc.serif", "Georgia")
+                    + "';font-size:" + QString::number(14 * scale)
+                    + "px;color:#B27D48;font-weight:bold;font-style:italic;\">"
+                    + escape(headParts.join(" · ")) + "</span>";
+            }
+        }
+        if (!phoneticLine.isEmpty()) out += paragraph(phoneticLine, 20, clr("#0874C4"), false, "font-family:'" + font("font.doc.phonetic", "sans-serif") + "';", 1);
         if (meanings.isEmpty()) out += paragraph(escape(entry.value("Translation").toString()), 19, clr("#008577"));
         if (!entry.value("DetailNote").toString().isEmpty()) out += paragraph(escape(entry.value("DetailNote").toString()), 12, "#777777");
         out += "<hr color=\""+clr("#A7D6A4")+"\" size=\"1\" />";
@@ -246,8 +263,8 @@ QString EntryRenderer::daily(const QJsonObject &article,const QJsonObject &setti
     if(link.scheme()=="https")attribution+="　<a href=\""+escape(link.toString())+"\">阅读原文</a>";
     const auto attributionHtml=r.paragraph(attribution,12,"#82758D");
     auto fragment=[](QString html){int start=html.indexOf('>',html.indexOf("<body"))+1;return html.mid(start,html.lastIndexOf("</body>")-start);};
-    auto heading=fragment(r.render(entry,{},1));heading.remove(QRegularExpression("<hr[^>]*>"));    QStringList headParts;for(auto meaning:record.value("Meanings").toArray()){const auto part=meaning.toObject().value("PartOfSpeech").toString();if(!part.isEmpty()&&!headParts.contains(part))headParts<<part;}
-    if(!headParts.isEmpty())heading+=r.paragraph("<b>"+escape(headParts.join(" · "))+"</b>",14,"#B27D48",true,"font-style:italic");
+    auto heading=fragment(r.render(entry,{},1,true));
+    heading.remove(QRegularExpression("<hr[^>]*>"));
     const auto imageData=article.value("ImageData").toString();
     if(!imageData.isEmpty()){
         const int imageWidth=qMax(1,article.value("ImageWidth").toInt(432)),imageHeight=qMax(1,article.value("ImageHeight").toInt(288));
@@ -269,7 +286,7 @@ QString EntryRenderer::daily(const QJsonObject &article,const QJsonObject &setti
         for(auto value:sentences){auto sentence=value.toObject();
             const auto marker=QString("<span style=\"font-family:sans-serif;font-size:%1px;font-style:normal;font-weight:400;color:#B5A5C9\">│ </span>").arg(14*styleNumber(settings,"number.doc.scale",.9));
             out+="<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\"><tr><td width=\"20\" valign=\"top\">"+r.paragraph(QString::number(++sentenceNumber),14,"#9B87B3",false,{},4)+"</td><td>";
-            out+=r.paragraph(marker+r.sentence(sentence.value("Text").toString(),sentence.value("Segments").toArray(),"#707070"),16,"#707070",true,"font-style:italic",4);
+            out+=r.paragraph(marker+r.sentence(sentence.value("Text").toString(),sentence.value("Segments").toArray(),"#707070"),18,"#707070",true,"font-style:italic",4);
             out+=r.paragraph(marker+escape(sentence.value("Chinese").toString()),14,r.clr("#008577"),false,{},2)+"</td></tr></table>";
         }
     }else{
@@ -298,25 +315,30 @@ QString EntryRenderer::message(const QString &title, const QString &body, const 
 
 EntryBrowser::EntryBrowser(QWidget *parent) : QTextBrowser(parent) {
     document()->setDocumentMargin(4);
-    document()->documentLayout()->registerHandler(QTextFormat::UserObject+1,this);
     setOpenLinks(false); setOpenExternalLinks(false); setMouseTracking(true); viewport()->setMouseTracking(true);
     setTextInteractionFlags(Qt::TextBrowserInteraction);
     setFrameShape(QFrame::NoFrame);
 }
 void EntryBrowser::setHtml(const QString &html) {
-    QTextBrowser::setHtml(html);
-    struct Badge {int position;QTextCharFormat format;};
-    QList<Badge> badges;
-    for(auto block=document()->begin();block.isValid();block=block.next())for(auto it=block.begin();!it.atEnd();++it){
-        const auto fragment=it.fragment();const auto image=fragment.charFormat().toImageFormat();
-        if(!fragment.isValid()||!image.name().startsWith("mydict-pos:"))continue;
-        auto format=fragment.charFormat();format.setObjectType(QTextFormat::UserObject+1);
-        format.setProperty(QTextFormat::UserProperty+1,image.property(QTextFormat::ImageAltText));
-        format.setProperty(QTextFormat::UserProperty+2,image.name()=="mydict-pos:active");
-        badges.append({fragment.position(),format});
+    setExtraSelections({});
+    QString content=html;
+    delete partBar;partBar=nullptr;setViewportMargins(0,0,0,0);
+    const auto table=QRegularExpression("<table cellspacing=\"5\" cellpadding=\"6\"><tr>(.*?)</tr></table>",QRegularExpression::DotMatchesEverythingOption).match(content);
+    if(table.hasMatch()&&table.captured().contains("href=\"pos:")){
+        partBar=new QWidget(this);partBar->setObjectName("partOfSpeechBar");
+        auto *layout=new QHBoxLayout(partBar);layout->setContentsMargins(4,4,4,4);layout->setSpacing(5);
+        auto links=QRegularExpression(R"rx(<td bgcolor="([^"]+)"><a style="([^"]+)" href="(pos:[^"]*)">(.*?)</a></td>)rx").globalMatch(table.captured());
+        while(links.hasNext()){
+            const auto match=links.next();auto *label=new QLabel(partBar);label->setObjectName("partOfSpeechLabel");
+            QString text=match.captured(4);text.replace("&nbsp;"," ");label->setText(text.trimmed());label->setTextFormat(Qt::PlainText);
+            label->setAlignment(Qt::AlignCenter);label->setCursor(Qt::PointingHandCursor);label->setProperty("partHref",match.captured(3));
+            label->setStyleSheet("QLabel {"+match.captured(2)+";background-color:"+match.captured(1)+";border-radius:8px;padding:6px 10px;} QLabel:hover {background-color:"+QString(match.captured(1)=="#4E8848"?"#3D7038":"#C3E2BD")+";} ");
+            label->installEventFilter(this);layout->addWidget(label);
+        }
+        layout->addStretch();const int height=layout->sizeHint().height();partBar->setGeometry(0,0,width(),height);partBar->show();setViewportMargins(0,height,0,0);
+        content.remove(table.capturedStart(),table.capturedLength());
     }
-    for(const auto &badge:badges){QTextCursor cursor(document());cursor.setPosition(badge.position);cursor.movePosition(QTextCursor::NextCharacter,QTextCursor::KeepAnchor);cursor.setCharFormat(badge.format);}
-
+    QTextBrowser::setHtml(content);
     struct Change {int position,length;QString style;};
     QList<Change> changes;QHash<QString,QString> styles;
     for(auto block=document()->begin();block.isValid();block=block.next())for(auto it=block.begin();!it.atEnd();++it){
@@ -334,37 +356,72 @@ void EntryBrowser::setHtml(const QString &html) {
     }
     cursor.endEditBlock();
 }
-QSizeF EntryBrowser::intrinsicSize(QTextDocument *doc,int,const QTextFormat &format) {
-    const QFont font=format.toCharFormat().font().resolve(doc->defaultFont());
-    const QFontMetricsF metrics(font);
-    return QSizeF(qCeil(metrics.horizontalAdvance(format.stringProperty(QTextFormat::UserProperty+1)))+24,qCeil(metrics.height())+12);
+void EntryBrowser::resizeEvent(QResizeEvent *event){
+    QTextBrowser::resizeEvent(event);if(partBar)partBar->resize(width(),partBar->height());
 }
-void EntryBrowser::drawObject(QPainter *painter,const QRectF &rect,QTextDocument *doc,int,const QTextFormat &format) {
-    const bool active=format.boolProperty(QTextFormat::UserProperty+2);
-    auto font=format.toCharFormat().font().resolve(doc->defaultFont());
-    font.setUnderline(false);
-    painter->save();painter->setRenderHint(QPainter::Antialiasing);
-    painter->setPen(Qt::NoPen);painter->setBrush(QColor(active?"#4E8848":"#A9D6A5"));painter->drawRoundedRect(rect,6,6);
-    painter->setFont(font);painter->setPen(QColor(active?"#FFFFFF":"#315E35"));
-    painter->drawText(rect,Qt::AlignCenter,format.stringProperty(QTextFormat::UserProperty+1));
-    painter->restore();
+bool EntryBrowser::eventFilter(QObject *object,QEvent *event){
+    if(auto *label=qobject_cast<QLabel*>(object);label&&label->property("partHref").isValid()){
+        if(event->type()==QEvent::MouseButtonRelease&&static_cast<QMouseEvent*>(event)->button()==Qt::LeftButton){emit anchorClicked(QUrl(label->property("partHref").toString()));return true;}
+    }
+    return QTextBrowser::eventFilter(object,event);
+}
+void EntryBrowser::paintEvent(QPaintEvent *event) {
+    QTextBrowser::paintEvent(event);
+    // Drawing an overlay avoids Qt shaping runs extending underline to neighbouring words.
+    QPainter painter(viewport());
+    for(const auto &selection:extraSelections()) {
+        auto cursor=selection.cursor;
+        const int start=cursor.selectionStart(),end=cursor.selectionEnd();
+        for(int i=start;i<end;++i){
+            cursor.setPosition(i);const auto left=cursorRect(cursor);
+            cursor.setPosition(i+1);const auto right=cursorRect(cursor);
+            if(left.top()!=right.top())continue;
+            cursor.setPosition(i);cursor.movePosition(QTextCursor::NextCharacter,QTextCursor::KeepAnchor);
+            auto color=cursor.charFormat().foreground().color();if(!color.isValid())color=palette().color(QPalette::Text);
+            painter.setPen(QPen(color,1));
+            painter.drawLine(left.left(),left.bottom()-1,right.left(),left.bottom()-1);
+        }
+    }
 }
 void EntryBrowser::mouseMoveEvent(QMouseEvent *event) {
-    QTextBrowser::mouseMoveEvent(event);
+    // Both QTextBrowser and QTextEdit forward hover to QTextControl. Avoid its
+    // native link formatting entirely; only delegate while dragging a selection.
+    if (event->buttons()!=Qt::NoButton) {
+        setExtraSelections({});QTextBrowser::mouseMoveEvent(event);return;
+    }
+    event->accept();
     QString anchor = anchorAt(event->pos());
+    viewport()->setCursor(anchor.isEmpty()?Qt::IBeamCursor:Qt::PointingHandCursor);
     QList<QTextEdit::ExtraSelection> selections;
     if (!anchor.isEmpty()) {
         QTextCursor c = cursorForPosition(event->pos());
         int position = c.position();
         auto isAnchorAt = [this, &anchor](int pos) { QTextCursor p(document()); p.setPosition(pos); p.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor); return p.charFormat().anchorHref() == anchor; };
         if (position > 0 && !isAnchorAt(position)) --position;
+        if (!isAnchorAt(position)) { setExtraSelections({}); return; }
         int start = position, end = position;
         while (start > 0 && isAnchorAt(start - 1)) --start;
         while (end < document()->characterCount() - 1 && isAnchorAt(end)) ++end;
-        if (end > start) { c.setPosition(start); c.setPosition(end, QTextCursor::KeepAnchor); QTextEdit::ExtraSelection selection; selection.cursor = c; selection.format.setFontUnderline(true); selections << selection; }
+        while(start<end && document()->characterAt(start).isSpace())++start;
+        while(end>start && document()->characterAt(end-1).isSpace())--end;
+        if (end > start) { c.setPosition(start); c.setPosition(end, QTextCursor::KeepAnchor); QTextEdit::ExtraSelection selection; selection.cursor = c; /* Keep layout formatting untouched: underline is painted separately. */ selections << selection; }
     }
     setExtraSelections(selections);
+    viewport()->update();
 }
-void EntryBrowser::leaveEvent(QEvent *event) { setExtraSelections({}); QTextBrowser::leaveEvent(event); }
+void EntryBrowser::leaveEvent(QEvent *event) { setExtraSelections({}); viewport()->update(); QTextBrowser::leaveEvent(event); }
 bool EntryBrowser::viewportEvent(QEvent *event) { if (event->type() == QEvent::ToolTip) return true; return QTextBrowser::viewportEvent(event); }
+ReviewBrowser::ReviewBrowser(QWidget *parent):EntryBrowser(parent){
+    setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setStyleSheet("background:transparent;border:0;");
+    connect(document(),&QTextDocument::contentsChanged,this,[this]{fitHeight();});
+}
+void ReviewBrowser::fitHeight(){document()->setTextWidth(viewport()->width());const int height=qMax(62,int(document()->size().height()+8));if(height!=this->height())setFixedHeight(height);}
+void ReviewBrowser::setText(const QString &value){
+    const QString html=format==Qt::PlainText?"<p align=\"center\"><b>"+value.toHtmlEscaped()+"</b></p>":QString(value).replace("<p style=", "<p align=\"center\" style=");
+    setHtml(html);fitHeight();
+}
+void ReviewBrowser::resizeEvent(QResizeEvent *event){EntryBrowser::resizeEvent(event);fitHeight();}
+
 }

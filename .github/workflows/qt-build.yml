@@ -4,9 +4,9 @@ on:
   push:
     tags: ["qt-v*"]
     branches: ["codex/qt-cross-platform"]
-    paths: ["Cpp-QT/src/**", "Cpp-QT/tests/*_test.cpp", "Cpp-QT/CMakeLists.txt", "Cpp-QT/resources.qrc", "Cpp-QT/environment.yml", "Cpp-QT/tools/package-qt.py", "Cpp-QT/packaging/**", "Cpp-QT/*.json", "Cpp-QT/QT-NOTICES.md", ".github/workflows/qt-build.yml"]
+    paths: ["src/**", "tests/*_test.cpp", "CMakeLists.txt", "resources.qrc", "environment.yml", "tools/package-qt.py", "packaging/**", "*.json", "QT-NOTICES.md", ".github/workflows/qt-build.yml"]
   pull_request:
-    paths: ["Cpp-QT/**", ".github/workflows/qt-build.yml"]
+    paths: ["src/**", "tests/**", "tools/**", "CMakeLists.txt", "resources.qrc", ".github/workflows/qt-build.yml"]
 permissions:
   contents: read
 concurrency:
@@ -33,7 +33,7 @@ jobs:
       - uses: conda-incubator/setup-miniconda@v3
         with:
           miniforge-version: latest
-          environment-file: Cpp-QT/environment.yml
+          environment-file: environment.yml
           activate-environment: mydict-qt
           auto-activate-base: false
           use-mamba: true
@@ -46,33 +46,33 @@ jobs:
       - name: Configure
         run: |
           if [[ "$RUNNER_OS" == Windows ]]; then
-            cmake -S Cpp-QT -B Cpp-QT/build/ci -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="$CONDA_PREFIX/Library" -DBUILD_TESTING=ON
+            cmake -S . -B build/ci -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="$CONDA_PREFIX/Library" -DBUILD_TESTING=ON
           else
-            cmake -S Cpp-QT -B Cpp-QT/build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" -DBUILD_TESTING=ON
+            cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" -DBUILD_TESTING=ON
           fi
       - name: Compile
-        run: cmake --build Cpp-QT/build/ci --config Release --parallel 3
+        run: cmake --build build/ci --config Release --parallel 3
       - name: Test offline
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           if [[ "$RUNNER_OS" == Windows ]]; then export QT_PLUGIN_PATH="$CONDA_PREFIX/Library/lib/qt6/plugins"; fi
-          ctest --test-dir Cpp-QT/build/ci -C Release --output-on-failure --output-junit test-results.xml
+          ctest --test-dir build/ci -C Release --output-on-failure --output-junit test-results.xml
       - name: Package native application
-        run: python Cpp-QT/tools/package-qt.py --build Cpp-QT/build/ci --prefix "$CONDA_PREFIX" --output Cpp-QT/dist
+        run: python tools/package-qt.py --build build/ci --prefix "$CONDA_PREFIX" --output dist
       - name: Smoke test packaged application
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python Cpp-QT/tools/smoke-package.py Cpp-QT/dist
+          python tools/smoke-package.py dist
       - name: Upload program and checksums
         uses: actions/upload-artifact@v4
         with:
           name: MyDictQt-${{ matrix.name }}
           path: |
-            Cpp-QT/dist/*.zip
-            Cpp-QT/dist/*.tar.gz
-            Cpp-QT/dist/*.sha256
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
           if-no-files-found: error
           retention-days: 30
       - name: Upload test results
@@ -80,14 +80,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tests-${{ matrix.name }}
-          path: Cpp-QT/build/ci/test-results.xml
+          path: build/ci/test-results.xml
           if-no-files-found: ignore
       - name: Upload Windows native font previews
         if: always() && runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: native-fonts-windows-x64
-          path: Cpp-QT/build/ci/native-fonts-*
+          path: build/ci/native-fonts-*
           if-no-files-found: ignore
           retention-days: 30
   release:
@@ -107,4 +107,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --title "拾词 MyDict Qt ${GITHUB_REF_NAME#qt-v}" --notes-file "Cpp-QT/docs/RELEASE-${GITHUB_REF_NAME#qt-v}.md"
+          gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --title "拾词 MyDict Qt ${GITHUB_REF_NAME#qt-v}" --notes-file "docs/RELEASE-${GITHUB_REF_NAME#qt-v}.md"

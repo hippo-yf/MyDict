@@ -2,7 +2,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <QTextBrowser>
-#include <QTextObjectInterface>
+#include <QWidget>
 namespace MyDict {
 QJsonObject flattenStyles(const QJsonObject &settings);
 QString styleValue(const QJsonObject &settings, const QString &key, const QString &fallback = {});
@@ -14,18 +14,32 @@ public:
     static QString reviewSentence(const QString &text, const QJsonArray &segments, const QJsonObject &settings);
     static QString message(const QString &title, const QString &body, const QJsonObject &settings);
 };
-class EntryBrowser : public QTextBrowser, public QTextObjectInterface {
+class EntryBrowser : public QTextBrowser {
     Q_OBJECT
-    Q_INTERFACES(QTextObjectInterface)
 public:
     explicit EntryBrowser(QWidget *parent = nullptr);
-    QSizeF intrinsicSize(QTextDocument *document, int position, const QTextFormat &format) override;
-    void drawObject(QPainter *painter, const QRectF &rect, QTextDocument *document, int position, const QTextFormat &format) override;
 public slots:
     void setHtml(const QString &html);
+private:
+    QWidget *partBar = nullptr;
 protected:
+    void resizeEvent(QResizeEvent *event) override;
+    bool eventFilter(QObject *object,QEvent *event) override;
+    void paintEvent(QPaintEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void leaveEvent(QEvent *event) override;
     bool viewportEvent(QEvent *event) override;
 };
+class ReviewBrowser : public EntryBrowser {
+    Qt::TextFormat format = Qt::PlainText;
+    void fitHeight();
+public:
+    explicit ReviewBrowser(QWidget *parent=nullptr);
+    void setTextFormat(Qt::TextFormat value){format=value;}
+    void setWordWrap(bool){}
+    void setText(const QString &value);
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+};
+
 }

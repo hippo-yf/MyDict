@@ -99,12 +99,32 @@ void background(QObject *owner, Work work, Done done, std::function<void(QString
     }));
 }
 QString identity(QString word, QString pair) { return normalizeWord(word) + "|" + pair; }
+QIcon parrotToggleIcon() {
+    QIcon icon;
+    for (bool on : {false,true}) {
+        const QString body=on?"#69D59B":"#A6A1B3", wing=on?"#299F91":"#777383", beak=on?"#FFC76C":"#BBB6C4";
+        const auto svg=QString(R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+<path d="M10 15L7 23L12 20L14 15" fill="%2"/>
+<path d="M7 11C7 6 9 2 14 2C18 2 20 5 19 9L17 10V14C17 18 13 20 10 18C7 17 6 14 7 11Z" fill="%1"/>
+<path d="M18 6C23 6 23 11 19 12L19 8L17 8Z" fill="%3"/>
+<path d="M9 10C15 9 16 14 11 17C8 16 8 13 9 10Z" fill="%2"/>
+<circle cx="16" cy="5.5" r="1.2" fill="#252236"/>
+<path d="M12 19V21M15 18V21M9 21H18" fill="none" stroke="%3" stroke-width="1.5" stroke-linecap="round"/>
+</svg>)").arg(body,wing,beak).toUtf8();
+        QSvgRenderer renderer(svg); QPixmap pixmap(48,48);pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);renderer.render(&painter);painter.end();pixmap.setDevicePixelRatio(2);
+        for(auto mode:{QIcon::Normal,QIcon::Active,QIcon::Selected})
+            icon.addPixmap(pixmap,mode,on?QIcon::On:QIcon::Off);
+    }
+    return icon;
+}
 QIcon vectorIcon(const QString &name, const QColor &color, int size = 24) {
     QPixmap pixmap(size * 2, size * 2); pixmap.setDevicePixelRatio(2); pixmap.fill(Qt::transparent);
     QPainter p(&pixmap); p.setRenderHint(QPainter::Antialiasing); p.scale(size / 24., size / 24.);
     p.setPen(QPen(color, 2.25, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); p.setBrush(Qt::NoBrush);
     if (name == "back") { p.drawLine(14, 5, 7, 12); p.drawLine(7, 12, 14, 19); }
     else if (name == "forward") { p.drawLine(10, 5, 17, 12); p.drawLine(17, 12, 10, 19); }
+    else if (name == "sync") { p.drawArc(QRectF(4,4,16,16),30*16,140*16); p.drawPolyline(QPolygonF({QPointF(3,4),QPointF(4,10),QPointF(9,7)})); p.drawArc(QRectF(4,4,16,16),210*16,140*16); p.drawPolyline(QPolygonF({QPointF(21,20),QPointF(20,14),QPointF(15,17)})); }
     else if (name == "close") { p.drawLine(6, 6, 18, 18); p.drawLine(18, 6, 6, 18); }
     else if (name == "minimize") p.drawLine(5, 16, 19, 16);
     else if (name == "maximize") p.drawRect(QRectF(5, 5, 14, 14));
@@ -124,6 +144,30 @@ QIcon vectorIcon(const QString &name, const QColor &color, int size = 24) {
         return QIcon(pixmap);
     }
     return QIcon(pixmap);
+}
+void syncIconState(QPushButton *button,const QString &state) {
+    auto *animation=button->findChild<QTimer*>("syncAnimation",Qt::FindDirectChildrenOnly);
+    if(!animation){
+        animation=new QTimer(button);animation->setObjectName("syncAnimation");
+        animation->setInterval(30);
+        QObject::connect(animation,&QTimer::timeout,button,[button]{
+            const int angle=(button->property("syncAngle").toInt()+9)%360;
+            button->setProperty("syncAngle",angle);
+            QPixmap frame(44,44);frame.setDevicePixelRatio(2);frame.fill(Qt::transparent);
+            QPainter painter(&frame);painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            painter.translate(11,11);painter.rotate(angle);painter.translate(-11,-11);
+            const auto source=vectorIcon("sync",QColor("#8CBFFF"),22).pixmap(QSize(44,44));
+            painter.drawPixmap(QRectF(0,0,22,22),source,QRectF(source.rect()));painter.end();
+            QIcon icon(frame);icon.addPixmap(frame,QIcon::Disabled);button->setIcon(icon);
+        });
+    }
+    animation->stop();button->setProperty("syncAngle",0);
+    if(state=="同步中")animation->start();
+
+    const QColor color=state=="已同步"?QColor("#69D59B"):state=="待同步"?QColor("#FFC76C"):state=="同步中"?QColor("#8CBFFF"):state=="重试同步"?QColor("#FF8585"):QColor(Qt::white);
+    auto icon=vectorIcon("sync",color,22);
+    icon.addPixmap(icon.pixmap(22,22),QIcon::Disabled);
+    button->setIcon(icon);button->setAccessibleName(state);button->setText({});
 }
 QPoint globalPoint(QMouseEvent *e) {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
@@ -201,7 +245,7 @@ void MainWindow::showEvent(QShowEvent *event) {
         if(pendingClose)return;
         startupReady=true;
         applySettings(false);
-        QTimer::singleShot(250,this,[this]{if(!pendingClose)new BirdPet(this);});
+        QTimer::singleShot(250,this,[this]{if(!pendingClose){birdPet=new BirdPet(this);birdPet->setPetVisible(settings.data.value("BirdVisible").toBool(true));}});
         networkThread.start();
         initialize();
     });
@@ -238,10 +282,22 @@ void MainWindow::createUi() {
     bookTab = new QPushButton(QStringLiteral("单词本")); bookTab->setObjectName("bookTab"); bookTab->setCheckable(true);
     lookupTab->setProperty("tab", true); bookTab->setProperty("tab", true);
     title->addWidget(lookupTab); title->addWidget(bookTab); dailyTab=new QPushButton("今日词汇");dailyTab->setObjectName("dailyTab");dailyTab->setProperty("tab",true);dailyTab->setCheckable(true);title->addWidget(dailyTab); title->addStretch();
-    sync = new QPushButton(QStringLiteral("同步")); sync->setObjectName("syncButton"); sync->setFixedHeight(28); title->addWidget(sync);
+    sync = new QPushButton; sync->setObjectName("syncButton"); sync->setFixedSize(30,32); sync->setIconSize(QSize(22,22)); syncIconState(sync,QStringLiteral("同步")); title->addWidget(sync);
     auto titleButton = [title](const QString &name, const QString &label) {
         auto *button = new QPushButton; button->setObjectName(name); button->setAccessibleName(label); button->setIcon(vectorIcon(name, Qt::white)); button->setFixedSize(30,32); title->addWidget(button); return button;
     };
+    birdToggle = new QPushButton;
+    birdToggle->setIcon(parrotToggleIcon()); birdToggle->setIconSize(QSize(24,24));
+    birdToggle->setStyleSheet("QPushButton#birdToggle{background:transparent;border:1px solid transparent;border-radius:5px;padding:2px;} QPushButton#birdToggle:checked{background:#345D58;border-color:#69B99A;} QPushButton#birdToggle:hover{border-color:#B8ADDB;background:#51466B;}");
+    birdToggle->setObjectName("birdToggle"); birdToggle->setCheckable(true);
+    birdToggle->setChecked(settings.data.value("BirdVisible").toBool(true));
+    birdToggle->setAccessibleName(QStringLiteral("显示或隐藏鹦鹉"));
+    birdToggle->setFixedSize(30,32); title->addWidget(birdToggle);
+    connect(birdToggle,&QPushButton::clicked,this,[this](bool visible){
+        settings.data.insert("BirdVisible",visible);
+        if(birdPet)birdPet->setPetVisible(visible);
+        try{settings.save();}catch(const std::exception &e){toast(QString::fromUtf8(e.what()),true);}
+    });
     auto *about = titleButton("about", QStringLiteral("关于拾词"));
     auto *minimize = titleButton("minimize", QStringLiteral("最小化"));
     auto *maximize = titleButton("maximize", QStringLiteral("最大化或还原"));
@@ -320,10 +376,17 @@ void MainWindow::createUi() {
     auto *questions = new QVBoxLayout(reviewContent);
     questions->setContentsMargins(4,4,4,4);
     questions->setSpacing(12);
-    reviewWord = new QLabel;
+    reviewWord = new ReviewBrowser;
     reviewWord->setObjectName("reviewWord");
     reviewWord->setTextFormat(Qt::PlainText);
     reviewWord->setWordWrap(true);
+    reviewWord->setOpenExternalLinks(false);
+    connect(reviewWord,&QTextBrowser::anchorClicked,this,[this](const QUrl &url){
+        if(url.scheme()!="word")return;
+        const auto word=QUrl::fromPercentEncoding(url.toString(QUrl::FullyEncoded).mid(5).toLatin1());
+        pages->setCurrentIndex(0);lookupTab->setChecked(true);bookTab->setChecked(false);
+        {QSignalBlocker block(input);input->setText(word);}lookup(false,false,true);
+    });
     reviewWord->setAlignment(Qt::AlignCenter);
     reviewWord->setMinimumHeight(62);
     questions->addWidget(reviewWord);
@@ -475,6 +538,8 @@ void MainWindow::showSelection(const HistorySelection &selection) {
 }
 
 void MainWindow::applySettings(bool restoreWindow) {
+    if(birdToggle)birdToggle->setChecked(settings.data.value("BirdVisible").toBool(true));
+    if(birdPet)birdPet->setPetVisible(settings.data.value("BirdVisible").toBool(true));
     updateFonts(!currentEntry.value("Record").toObject().value("Phonetic").toString().isEmpty());
     auto value=[this](QString key,QString fallback){return styleValue(settings.data,key,fallback);};
     auto validColor=[&](QString key,QString fallback){QColor c(value(key,fallback));return c.isValid()?c.name():fallback;};
@@ -488,7 +553,7 @@ void MainWindow::applySettings(bool restoreWindow) {
         "QWidget#titleBar QPushButton:hover{background:#58456F;}"
         "QWidget#titleBar QPushButton[tab=true]{border-radius:0;min-width:64px;font-size:13pt;border-bottom:2px solid transparent;padding:8px 10px;}"
         "QWidget#titleBar QPushButton[tab=true]:checked{border-bottom:2px solid #C4B5FD;background:#493564;}"
-        "QWidget#titleBar QPushButton#syncButton{background:%4;border-radius:5px;min-width:48px;font-size:10pt;padding:3px 8px;}"
+        "QWidget#titleBar QPushButton#syncButton{background:transparent;border-radius:5px;min-width:0;padding:2px;}"
         "QPushButton{border:0;border-radius:5px;padding:4px 8px;background:#EEEAF8;color:%4;}"
         "QPushButton:hover{background:#E4DDEE;}QPushButton:pressed{background:#D6CDEE;}"
         "QPushButton:disabled{color:#B9B4C5;background:transparent;}"
@@ -504,8 +569,9 @@ void MainWindow::applySettings(bool restoreWindow) {
         "QLabel#notice{border-radius:7px;padding:10px;font-size:11pt;background:#30234D;color:white;}"
         "QLabel#emptyBook{color:#92899F;background:transparent;}"
         "QWidget#reviewPage QScrollArea,QWidget#reviewPage QScrollArea>QWidget>QWidget{background:transparent;}"
-        "QLabel#reviewWord{font-size:%5px;font-weight:900;color:%4;}"
-        "QLabel#reviewWord[sentenceQuestion=true]{font-size:%7px;font-weight:600;}"
+        "QLabel#reviewPrompt{font-size:%6px;}"
+        "QTextBrowser#reviewWord{font-size:%5px;font-weight:900;color:%4;}"
+        "QTextBrowser#reviewWord[sentenceQuestion=true]{font-size:%7px;font-weight:600;}"
         "QComboBox#reviewMode{background:#EEEAF8;color:%4;border:1px solid #D8D0E5;border-radius:5px;padding:4px 8px;}"
         "QPushButton[reviewChoice=true]{background:white;border:1px solid #D8D0E5;border-radius:8px;}"
         "QPushButton[reviewChoice=true]:hover{background:#F0EBFA;border-color:%4;}"
@@ -792,7 +858,7 @@ void MainWindow::nextReview() {
         reviewUnfamiliar->setEnabled(true);
         reviewMode->setEnabled(true);
         reviewWord->setTextFormat(question.sentence.isEmpty() ? Qt::PlainText : Qt::RichText);
-        reviewWord->setTextInteractionFlags(Qt::NoTextInteraction);
+        reviewWord->setTextInteractionFlags(question.sentence.isEmpty()?Qt::NoTextInteraction:Qt::LinksAccessibleByMouse);
         reviewWord->setText(question.sentence.isEmpty() ? question.word : EntryRenderer::reviewSentence(question.sentence, question.sentenceSegments, settings.data));
         reviewWord->setProperty("sentenceQuestion", !question.sentence.isEmpty());
         reviewWord->style()->unpolish(reviewWord);
@@ -896,6 +962,7 @@ void MainWindow::saveReviewAnswer() {
             reviewBusy = false;
             reviewMode->setEnabled(true);
             review.token.clear();
+            if(saved){dirty();refreshBook();}
             if (!saved) toast(QStringLiteral("该词已取消收藏或移除。"));
             if ((correct && review.sentence.isEmpty()) || reviewAdvancePending) nextReview();
         }, [this,revision](QString error) {
@@ -907,7 +974,7 @@ void MainWindow::saveReviewAnswer() {
         });
 }
 
-void MainWindow::dirty(){if(!syncing)sync->setText(QStringLiteral("待同步"));++dirtyGeneration;if(!firstDirtyAt)firstDirtyAt=QDateTime::currentMSecsSinceEpoch();}
+void MainWindow::dirty(){if(!syncing)syncIconState(sync,QStringLiteral("待同步"));++dirtyGeneration;if(!firstDirtyAt)firstDirtyAt=QDateTime::currentMSecsSinceEpoch();}
 void MainWindow::writeFinished(){pendingWrites=qMax(0,pendingWrites-1);if(pendingClose&&pendingWrites==0)QTimer::singleShot(0,this,[this]{close();});}
 void MainWindow::toast(const QString &message,bool error){
     notice->setText(message);notice->setStyleSheet(QString("QLabel#notice{background:%1;color:white;border-radius:7px;padding:10px;font-size:11pt;}").arg(error?"#9E3948":"#30234D"));
@@ -916,18 +983,18 @@ void MainWindow::toast(const QString &message,bool error){
 void MainWindow::runSync(bool pullOnly){
     if(!initialized||syncing||pendingClose)return;
     if(settings.databasePath()!=database.path()){toast(QStringLiteral("请重新启动，应用新用户身份后再同步。"),true);return;}
-    syncing=true;sync->setEnabled(false);sync->setText(QStringLiteral("同步中"));QString directory=settings.directory,dbPath=database.path(),user=activeUsername;QJsonObject config=settings.data;const auto generation=dirtyGeneration;syncCanceled=std::make_shared<std::atomic_bool>(false);auto canceled=syncCanceled;
+    syncing=true;sync->setEnabled(false);syncIconState(sync,QStringLiteral("同步中"));QString directory=settings.directory,dbPath=database.path(),user=activeUsername;QJsonObject config=settings.data;const auto generation=dirtyGeneration;syncCanceled=std::make_shared<std::atomic_bool>(false);auto canceled=syncCanceled;
     struct Synced{QString message;bool pending=false;};
     background(this,[directory,config,dbPath,user,pullOnly,canceled]{auto message=CacheSync::run(directory,config,dbPath,user,pullOnly,canceled);Database db(dbPath,user);return Synced{message,db.revision()>db.syncedRevision()};},[this,generation](Synced result){
-        syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("已同步"));
+        syncing=false;sync->setEnabled(true);syncIconState(sync,QStringLiteral("已同步"));
         if(result.pending||generation!=dirtyGeneration){if(!firstDirtyAt)dirty();}else firstDirtyAt=0;
-        if(result.pending||generation!=dirtyGeneration)sync->setText(QStringLiteral("待同步"));
+        if(result.pending||generation!=dirtyGeneration)syncIconState(sync,QStringLiteral("待同步"));
         refreshBook();updateHistory();
         if(pages->currentIndex()==3)dailyPage->activate();
         // Refresh only the chosen source, including a previously empty source
         // that has just arrived through sync. Do not interrupt a query/debounce.
         if(!input->text().trimmed().isEmpty()&&!inputDelay->isActive()&&query->text()==QStringLiteral("查询"))lookup(false,false,false,true);
-    },[this](QString error){syncing=false;sync->setEnabled(true);sync->setText(QStringLiteral("重试同步"));toast(QStringLiteral("同步失败：")+error+QStringLiteral("\n本地词库已保存，可点击重试。"),true);});
+    },[this](QString error){syncing=false;sync->setEnabled(true);syncIconState(sync,QStringLiteral("重试同步"));toast(QStringLiteral("同步失败：")+error+QStringLiteral("\n本地词库已保存，可点击重试。"),true);});
 }
 void MainWindow::exportBook(){
     if(!initialized)return;QString path=QFileDialog::getSaveFileName(this,QStringLiteral("导出单词本"),QDir::homePath()+"/MyDict.csv",QStringLiteral("CSV 文件 (*.csv)"));if(path.isEmpty())return;auto db=database;QString search=filter->text().trimmed();bool only=true;
@@ -974,6 +1041,7 @@ bool MainWindow::eventFilter(QObject *watched,QEvent *event){
         && (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick)
         && static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton
         && (widget == pages->widget(2) || pages->widget(2)->isAncestorOf(widget))
+        && widget != reviewWord && !reviewWord->isAncestorOf(widget)
         && widget != reviewExit && !reviewExit->isAncestorOf(widget)
         && widget != reviewMode && !reviewMode->isAncestorOf(widget)
         && (reviewAnswered || (!reviewBusy && review.token.isEmpty()))) {

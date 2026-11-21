@@ -342,18 +342,42 @@ private slots:
         QCOMPARE(pages->currentIndex(), 1);
     }
 
-    void roundedPartLabelsRemainClickable(){
-        EntryBrowser browser;browser.resize(650,400);browser.setHtml(EntryRenderer::render(entry(),defaultSettings()));browser.show();
-        QTextCursor label(browser.document());bool found=false;
-        for(auto block=browser.document()->begin();block.isValid()&&!found;block=block.next())for(auto it=block.begin();!it.atEnd();++it){
-            const auto fragment=it.fragment();if(fragment.isValid()&&fragment.charFormat().objectType()==QTextFormat::UserObject+1&&fragment.charFormat().anchorHref()=="pos:verb"){
-                QCOMPARE(fragment.charFormat().fontWeight(),int(QFont::Black));
-                label.setPosition(fragment.position());found=true;break;
-            }
+    void hoverOnlyOneRepeatedWord(){
+        EntryBrowser browser;browser.resize(650,300);
+        browser.setHtml("<p><a href='word:test' style='text-decoration:none'>test</a> other <a href='word:test' style='text-decoration:none'>test</a></p>");browser.show();QTest::qWait(20);
+        QTextCursor cursor(browser.document());cursor.setPosition(1);
+        QTest::mouseMove(browser.viewport(),browser.cursorRect(cursor).center());
+        QCOMPARE(browser.extraSelections().size(),1);
+        QCOMPARE(browser.extraSelections().first().cursor.selectionStart(),0);
+        QCOMPARE(browser.extraSelections().first().cursor.selectionEnd(),4);
+        cursor.setPosition(12);QTest::mouseMove(browser.viewport(),browser.cursorRect(cursor).center());
+        QCOMPARE(browser.extraSelections().size(),1);
+        QCOMPARE(browser.extraSelections().first().cursor.selectionStart(),11);
+        QCOMPARE(browser.extraSelections().first().cursor.selectionEnd(),15);
+    }
+    void hoverAdjacentWordsClearsPrevious(){
+        EntryBrowser browser;browser.resize(650,300);
+        browser.setHtml("<p><a href='word:left' style='text-decoration:none'>left</a> <a href='word:right' style='text-decoration:none'>right</a></p>");browser.show();QTest::qWait(20);
+        QTextCursor cursor(browser.document());
+        const auto baseline=browser.viewport()->grab().toImage();
+        cursor.setPosition(4);const int leftEdge=browser.cursorRect(cursor).left();
+        for(int position: {1,6,1,6}){
+            cursor.setPosition(position);const auto point=browser.cursorRect(cursor).center();
+            QMouseEvent move(QEvent::MouseMove,QPointF(point),QPointF(browser.viewport()->mapToGlobal(point)),Qt::NoButton,Qt::NoButton,Qt::NoModifier);QApplication::sendEvent(browser.viewport(),&move);
+            QCOMPARE(browser.extraSelections().size(),1);
+            QCOMPARE(browser.extraSelections().first().cursor.selectedText(),position==1?QString("left"):QString("right"));
         }
-        QVERIFY(found);QTest::qWait(20);QSignalSpy clicks(&browser,&QTextBrowser::anchorClicked);
-        auto point=browser.cursorRect(label).center()+QPoint(10,0);QCOMPARE(browser.anchorAt(point),QString("pos:verb"));
-        QTest::mouseClick(browser.viewport(),Qt::LeftButton,Qt::NoModifier,point);QCOMPARE(clicks.count(),1);QCOMPARE(clicks.first().first().toUrl().toString(),QString("pos:verb"));
+        QTest::qWait(30);
+        const auto hovered=browser.viewport()->grab().toImage();
+        const int pixelWidth=qRound(leftEdge*baseline.devicePixelRatio());
+        QCOMPARE(hovered.copy(0,0,pixelWidth,baseline.height()),baseline.copy(0,0,pixelWidth,baseline.height()));
+        QMouseEvent outside(QEvent::MouseMove,QPointF(500,200),QPointF(browser.viewport()->mapToGlobal(QPoint(500,200))),Qt::NoButton,Qt::NoButton,Qt::NoModifier);QApplication::sendEvent(browser.viewport(),&outside);QVERIFY(browser.extraSelections().isEmpty());
+    }
+    void textPartLabelsRemainClickable(){
+        EntryBrowser browser;browser.resize(650,400);browser.setHtml(EntryRenderer::render(entry(),defaultSettings()));browser.show();
+        QLabel *label=nullptr;for(auto *candidate:browser.findChildren<QLabel*>("partOfSpeechLabel"))if(candidate->property("partHref").toString()=="pos:verb")label=candidate;
+        QVERIFY(label);QCOMPARE(label->text(),QString("verb"));QSignalSpy clicks(&browser,&QTextBrowser::anchorClicked);
+        QTest::mouseClick(label,Qt::LeftButton);QCOMPARE(clicks.count(),1);QCOMPARE(clicks.first().first().toUrl().toString(),QString("pos:verb"));
     }
     void compactWindowKeepsControlsVisible(){
         QTemporaryDir dir;QVERIFY(dir.isValid());Settings config(dir.path());offlineSettings(config,"compact-ui",true);
